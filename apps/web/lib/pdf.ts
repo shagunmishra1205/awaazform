@@ -170,26 +170,46 @@ export function cleanLabel(s: string): string {
 
 /** Asks the server to identify questions, one page per request (keeps each request inside free-tier token limits).
  * Only printed form text is sent, never answers. Long sentences are dropped: they are instructions, not labels. */
-export async function aiCandidates(items: TextItem[], pages: PageSize[]): Promise<Candidate[]> {
+/**
+ * Asks the AI for each page's questions. A page that fails (usually the AI's per-minute rate limit) is
+ * retried once after the server's Retry-After; if it still fails, that page alone falls back to the
+ * simple rules, and every page the AI did read is kept. `fallbackPages` lists the pages that used rules.
+ */
+export async function aiCandidates(items: TextItem[], pages: PageSize[]): Promise<{ candidates: Candidate[]; fallbackPages: number[]; error?: string }> {
   const known = new Set(items.map((i) => i.id));
   const out: Candidate[] = [];
+  const fallbackPages: number[] = [];
+  let lastError: string | undefined;
   for (let p = 0; p < pages.length; p++) {
     const pageItems = items.filter((i) => i.page === p && i.text.length <= 110);
     if (pageItems.length === 0) continue;
-    const res = await fetch('/api/extract', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        page: p, pageSize: pages[p],
-        items: pageItems.slice(0, 350).map(({ id, x, y, text }) => ({ id, x: Math.round(x), y: Math.round(y), text })),
-      }),
+    const body = JSON.stringify({
+      page: p, pageSize: pages[p],
+      items: pageItems.slice(0, 350).map(({ id, x, y, text }) => ({ id, x: Math.round(x), y: Math.round(y), text })),
     });
-    const json = (await res.json().catch(() => ({}))) as { questions?: Omit<Candidate, 'include'>[]; error?: string };
-    if (!res.ok || !json.questions) throw new Error(json.error ?? 'AI could not read this form');
-    // Office-use fields are unticked (not removed), so the user can still include them.
-    out.push(...json.questions.filter((q) => known.has(q.itemId)).map((q) => ({ ...q, include: !OFFICE_USE.test(q.label) })));
+    let questions: Omit<Candidate, 'include'>[] | null = null;
+    for (let attempt = 0; attempt < 2 && !questions; attempt++) {
+      try {
+        const res = await fetch('/api/extract', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+        const json = (await res.json().catch(() => ({}))) as { questions?: Omit<Candidate, 'include'>[]; error?: string };
+        if (res.ok && json.questions) { questions = json.questions; break; }
+        lastError = json.error ?? `AI request failed (${res.status})`;
+        if (res.status !== 429 && res.status < 500) break; // a real refusal: retrying won't help
+        const wait = Math.min(20, Number(res.headers.get('retry-after')) || 6) * 1000;
+        if (attempt === 0) await new Promise((r) => setTimeout(r, wait));
+      } catch (err) {
+        lastError = (err as Error).message;
+      }
+    }
+    if (questions) {
+      // Office-use fields are unticked (not removed), so the user can still include them.
+      out.push(...questions.filter((q) => known.has(q.itemId)).map((q) => ({ ...q, include: !OFFICE_USE.test(q.label) })));
+    } else {
+      fallbackPages.push(p);
+      out.push(...heuristicCandidates(items.filter((i) => i.page === p)));
+    }
   }
-  return out;
+  return { candidates: out, fallbackPages, error: fallbackPages.length ? lastError : undefined };
 }
 
 /** Places an answer box to the right of the label, up to the next label on the line or the margin. */

@@ -1,8 +1,10 @@
+import { LANGUAGES } from '@awaazform/core';
 import { config, errorResponse, groqFetch } from '@/lib/groq';
 import { rateLimit, tooMany } from '@/lib/rate-limit';
 import { guard, preflight, withCors } from '@/lib/guard';
 
 export const runtime = 'nodejs';
+export const maxDuration = 60;
 
 // Speech-to-text. Audio is forwarded to Groq and never written to disk (§9.4).
 async function handlePost(req: Request): Promise<Response> {
@@ -22,7 +24,10 @@ async function handlePost(req: Request): Promise<Response> {
     body.set('model', config.sttModel);
     body.set('response_format', 'json');
     body.set('temperature', '0');
-    if (language === 'hi' || language === 'en' || language === 'mr') body.set('language', language);
+    if (typeof language === 'string' && (LANGUAGES as readonly string[]).includes(language)) body.set('language', language);
+    // Context for Whisper: the question being answered (no personal data), capped well under its limit.
+    const prompt = form.get('prompt');
+    if (typeof prompt === 'string' && prompt.trim()) body.set('prompt', prompt.slice(0, 600));
 
     const res = await groqFetch('/audio/transcriptions', { method: 'POST', body });
     const json = (await res.json()) as { text?: string };

@@ -68,7 +68,10 @@ export function PdfFlow({ file, onPick }: { file?: File; onPick: (f: File) => vo
     let via: 'ai' | 'heuristic' = 'ai';
     let aiError: string | undefined;
     try {
-      candidates = await aiCandidates(a.items, a.pages);
+      const r = await aiCandidates(a.items, a.pages);
+      candidates = r.candidates;
+      // Some pages may have used the simple rules; say so, but keep what the AI found.
+      if (r.fallbackPages.length) aiError = r.error;
       if (candidates.length === 0) throw new Error('AI found no questions');
     } catch (err) {
       candidates = heuristicCandidates(a.items);
@@ -118,7 +121,7 @@ export function PdfFlow({ file, onPick }: { file?: File; onPick: (f: File) => vo
             <p className="mt-1 max-w-2xl text-muted">
               {fmt(step.via === 'ai' ? D.review_ai : step.aiError ? D.review_rules_err : D.review_rules,
                 { n: step.candidates.length, title: step.title, error: localizeMessage(t, step.aiError) })}
-            </p>
+            {step.via === 'ai' && step.aiError && <span className="mt-1 block text-sm" style={{ color: 'var(--amber-700)' }}>{D.review_partial}</span>}</p>
           </div>
           <div className="flex gap-2">
             <button type="button" className="btn btn-ghost" onClick={() => setStep({ s: 'upload' })}>{t.common.choose_another}</button>

@@ -13,11 +13,11 @@ const ZIP = '/downloads/awaazform-extension.zip';
 export default function ExtensionPage() {
   const { t } = useSettings();
   const E = t.ext;
-  const [info, setInfo] = useState<{ version: string; size: string } | null>(null);
+  const [info, setInfo] = useState<{ version: string; size: string } | null | 'missing'>(null);
   useEffect(() => {
     fetch('/downloads/extension.json').then((r) => (r.ok ? r.json() : null)).then((j: { version: string; bytes: number } | null) => {
-      if (j) setInfo({ version: j.version, size: `${Math.max(1, Math.round(j.bytes / 1024))} KB` });
-    }).catch(() => {});
+      setInfo(j ? { version: j.version, size: `${Math.max(1, Math.round(j.bytes / 1024))} KB` } : 'missing');
+    }).catch(() => setInfo('missing'));
   }, []);
   const steps = [[E.i1_t, E.i1_b], [E.i2_t, E.i2_b], [E.i3_t, E.i3_b], [E.i4_t, E.i4_b]];
   return (
@@ -28,11 +28,13 @@ export default function ExtensionPage() {
           <h1 className="text-[clamp(2rem,4vw,2.75rem)]"><Rich text={E.title} /></h1>
           <p className="text-muted">{E.lead}</p>
           <div className="grid justify-items-center gap-2 md:justify-items-start">
-            <a className="btn btn-lg" href={ZIP} download>
+            {info === 'missing' ? <p className="text-sm text-muted">{E.download_missing}</p> : (
+            <a className="btn btn-lg" href={ZIP} download aria-disabled={!info}>
               <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14" /></svg>
               {E.download}
             </a>
-            {info && <span className="text-xs text-muted">{fmt(E.download_note, info)}</span>}
+            )}
+            {info && info !== 'missing' && <span className="text-xs text-muted">{fmt(E.download_note, info)}</span>}
           </div>
         </Reveal>
         <Reveal delay={0.1}><WidgetPreview /></Reveal>

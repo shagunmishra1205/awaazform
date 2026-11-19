@@ -4,6 +4,8 @@ import { rateLimit, tooMany } from '@/lib/rate-limit';
 import { guard, preflight, withCors } from '@/lib/guard';
 
 export const runtime = 'nodejs';
+// AI on a dense page can take ~10 s, plus a rate-limit retry; give serverless hosts room.
+export const maxDuration = 60;
 
 // J4 step 2: identify questions on a flat (printed) PDF from its text and positions.
 // Only the printed form text is sent — never the user's answers.
@@ -50,7 +52,8 @@ async function handlePost(req: Request): Promise<Response> {
     const res = await chatCompletion((model) => ({
         model,
         temperature: 0,
-        max_tokens: 5000,
+        // Groq counts the requested maximum against the per-minute budget: reserve what a page needs, not 5000.
+        max_tokens: Math.min(4000, 900 + items.length * 12),
         ...(/gpt-oss/.test(model) ? { reasoning_effort: 'low' } : {}),
         response_format: { type: 'json_object' },
         messages: [

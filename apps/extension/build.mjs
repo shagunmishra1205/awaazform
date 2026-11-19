@@ -1,16 +1,27 @@
 // Builds the extension into dist/ and zips it for the website's download button.
 //   node build.mjs                 → dist/ + ../web/public/downloads/awaazform-extension.zip
 //   AWAAZ_SERVER=https://… node build.mjs   sets the server the widget talks to by default
-import { build } from 'esbuild';
-import { zipSync } from 'fflate';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+// The website's build runs this script. If the extension's tools aren't installed (a host that only installs
+// apps/web), skip the zip with a warning rather than failing the deploy; the download button then hides.
+let build, zipSync;
+try {
+  ({ build } = await import('esbuild'));
+  ({ zipSync } = await import('fflate'));
+} catch (err) {
+  console.warn(`extension: skipped (${err.code ?? err.message}). Run pnpm install at the repo root to build it.`);
+  process.exit(0);
+}
 const web = join(here, '../web');
 const dist = join(here, 'dist');
-const server = process.env.AWAAZ_SERVER || process.env.NEXT_PUBLIC_SITE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
+// On Vercel, the production domain (not the per-deploy preview URL) is the widget's default server.
+const vercel = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+const server = process.env.AWAAZ_SERVER || process.env.NEXT_PUBLIC_SITE_URL || (vercel ? `https://${vercel}` : 'http://localhost:3000');
 
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(join(dist, 'locales'), { recursive: true });

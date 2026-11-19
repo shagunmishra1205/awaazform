@@ -44,6 +44,10 @@ export async function groqFetch(path: string, init: RequestInit): Promise<Respon
 }
 
 export function errorResponse(err: unknown): Response {
+  // Tell clients when to try again after a rate limit (the PDF reader waits and retries one page).
+  if (err instanceof GroqError && err.status === 429) {
+    return Response.json({ error: err.message, fallback: 'typing' }, { status: 429, headers: { 'Retry-After': '8' } });
+  }
   // Unexpected errors: log the message only (never request bodies, which can hold personal data).
   if (!(err instanceof GroqError)) console.error('[api] unexpected error:', (err as Error)?.message ?? String(err));
   const status = err instanceof GroqError ? err.status : 500;

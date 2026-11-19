@@ -4,6 +4,7 @@ import { rateLimit, tooMany } from '@/lib/rate-limit';
 import { guard, preflight, withCors } from '@/lib/guard';
 
 export const runtime = 'nodejs';
+export const maxDuration = 60;
 
 type Msg =
   | { role: 'user' | 'assistant'; content: string; tool_calls?: unknown[] }
