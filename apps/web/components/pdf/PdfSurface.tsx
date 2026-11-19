@@ -123,6 +123,9 @@ export function PdfSurface({ handleRef, bytes, plan, filler }: {
           const chosen = (vis === 'written' || vis === 'verified') && b.optionBoxes ? (shown[q.id] ?? '').split(', ') : [];
           // The same line breaks the download uses: long answers continue on the printed lines below.
           const segs = !b.optionBoxes && value ? filler.segments(q, value) : [];
+          // Character boxes: every character sits in its own box, none inside the row's outline.
+          const inline = b.cells?.length ? [] : segs.slice(0, 1);
+          const extra = b.cells?.length ? segs : segs.slice(1);
           const lineStyle = {
             color: vis === 'typing' || vis === 'proposed' ? 'var(--violet-600)' : '#0d1a73',
             fontStyle: vis === 'typing' || vis === 'proposed' ? 'italic' : 'normal',
@@ -139,10 +142,10 @@ export function PdfSurface({ handleRef, bytes, plan, filler }: {
                   fontSize: (segs[0]?.size ?? Math.min(11, b.box.h - 3)) * scale,
                   ...lineStyle,
                 }}>
-                {!b.optionBoxes && <span className="whitespace-nowrap">{segs[0]?.text ?? ''}</span>}
+                {!b.optionBoxes && <span className="whitespace-nowrap">{inline[0]?.text ?? ''}</span>}
                 {vis === 'verified' && <span aria-label="verified" className="absolute -top-2 -right-2 grid h-4 w-4 place-items-center rounded-full text-[9px] text-white" style={{ background: 'var(--green-600)' }}>✓</span>}
               </div>
-              {segs.slice(1).map((seg, i) => (
+              {extra.map((seg, i) => (
                 <div key={i} aria-hidden className="absolute flex items-center overflow-hidden px-0.5"
                   style={{ ...boxStyle(seg.box, plan.layout.pages[page]!, scale), fontSize: seg.size * scale, ...lineStyle }}>
                   <span className="whitespace-nowrap">{seg.text}</span>

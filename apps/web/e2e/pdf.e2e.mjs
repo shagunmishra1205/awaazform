@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 const SHOTS = process.env.SHOTS;
-const FORM = fileURLToPath(new URL('../../../example_forms/Form_6_English.pdf', import.meta.url));
+const FORM = process.env.PDF_FILE ?? fileURLToPath(new URL('../../../example_forms/Form_6_English.pdf', import.meta.url));
 
 const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL ?? 'msedge', headless: true });
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });

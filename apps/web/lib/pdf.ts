@@ -19,7 +19,7 @@ export interface TextItem { id: string; page: number; x: number; y: number; w: n
 /** Where each question lives on the page, for the preview overlay. */
 export interface PdfLayout {
   pages: PageSize[];
-  boxes: Record<string, { page: number; box: PdfBox; more?: PdfBox[]; optionBoxes?: Record<string, PdfBox> }>;
+  boxes: Record<string, { page: number; box: PdfBox; more?: PdfBox[]; cells?: PdfBox[]; optionBoxes?: Record<string, PdfBox> }>;
 }
 
 export interface PdfPlan {
@@ -103,6 +103,13 @@ export async function analyzePdf(bytes: ArrayBuffer, fileName: string): Promise<
       const it = { id: `p${p}i${i}`, page: p, x: raw.transform[4], y: raw.transform[5], w: raw.width, h: raw.height || 9, text };
       // A run of underscores or dots is a printed answer line, not a label.
       if (/^[_.…\s]{6,}$/.test(text)) { rules.push({ page: p, x1: it.x, x2: it.x + it.w, y: it.y }); return; }
+      // “E mail ID.______”: one text item holding the label and its line. Split them.
+      if (/_{4,}/.test(text)) {
+        const parts = splitUnderlines(it);
+        items.push(...parts.items);
+        rules.push(...parts.rules);
+        return;
+      }
       items.push(it);
     });
     try {
@@ -116,6 +123,37 @@ export async function analyzePdf(bytes: ArrayBuffer, fileName: string): Promise<
     return { kind: 'unsupported', reason: 'This PDF looks like a scan (a picture of a page), so there is no text to work with. Scanned PDFs are not supported.' };
   }
   return { kind: 'flat', fileName, title, pages, items, rules, rects };
+}
+
+/**
+ * Splits a text item like “E mail ID.______ Date:____” into labels and answer lines. pdf.js only gives
+ * the whole item's width, so positions are estimated: an underscore is about half the font size wide.
+ */
+function splitUnderlines(it: TextItem): { items: TextItem[]; rules: Rule[] } {
+  const raw = it.text;
+  const runs = [...raw.matchAll(/_{4,}/g)];
+  const under = runs.reduce((n, r) => n + r[0].length, 0);
+  const others = raw.length - under;
+  const uw = Math.min(it.h * 0.5, it.w / Math.max(1, under));
+  const ow = others ? Math.max(0, (it.w - under * uw) / others) : 0;
+  const items: TextItem[] = [];
+  const rules: Rule[] = [];
+  let x = it.x;
+  let k = 0;
+  for (const part of raw.split(/(_{4,})/)) {
+    if (!part) continue;
+    if (/^_{4,}$/.test(part)) {
+      rules.push({ page: it.page, x1: x, x2: x + part.length * uw, y: it.y - 1 });
+      x += part.length * uw;
+    } else {
+      const w = part.length * ow;
+      const lead = part.length - part.trimStart().length;
+      const text = part.trim();
+      if (text) items.push({ ...it, id: k++ ? `${it.id}s${k}` : it.id, x: x + lead * ow, w: text.length * ow, text });
+      x += w;
+    }
+  }
+  return { items, rules };
 }
 
 type Matrix = [number, number, number, number, number, number];
@@ -133,8 +171,18 @@ const mul = (m: Matrix, n: Matrix): Matrix => [
 function drawnShapes(ops: { fnArray: number[]; argsArray: unknown[][] }, OPS: Record<string, number>, page: number) {
   const rules: Rule[] = [];
   const rects: Rect[] = [];
+  const verticals: { x: number; y1: number; y2: number }[] = [];
   const stack: Matrix[] = [];
   let m: Matrix = [1, 0, 0, 1, 0, 0];
+  const at = (x: number, y: number): [number, number] => [x * m[0] + y * m[2] + m[4], x * m[1] + y * m[3] + m[5]];
+  const addBox = (pts: [number, number][]) => {
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    const x = Math.min(...xs), y = Math.min(...ys), w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+    if (w >= 30 && h <= 2.5) rules.push({ page, x1: x, x2: x + w, y });
+    else if (w <= 2.5 && h >= 6 && h <= 30) verticals.push({ x, y1: y, y2: y + h });
+    else if (w >= 24 && h >= 24 && w < 500) rects.push({ page, x, y, w, h });
+    else if (w >= 6 && w <= 28 && h >= 6 && h <= 28) rects.push({ page, x, y, w, h }); // a tick box or a character cell
+  };
   for (let i = 0; i < ops.fnArray.length; i++) {
     const fn = ops.fnArray[i];
     const args = ops.argsArray[i] ?? [];
@@ -142,14 +190,46 @@ function drawnShapes(ops: { fnArray: number[]; argsArray: unknown[][] }, OPS: Re
     else if (fn === OPS.restore) m = stack.pop() ?? m;
     else if (fn === OPS.transform) m = mul(args as unknown as Matrix, m);
     else if (fn === OPS.constructPath) {
+      // pdf.js ≥ 5: [drawOp, [pathData], bbox]; path data ops: 0 moveTo, 1 lineTo, 2 curveTo, 3 quad, 4 close.
+      const data = (args[1] as ArrayLike<number>[] | undefined)?.[0];
+      if (data && typeof data[0] === 'number') {
+        let sub: [number, number][] = [];
+        let k = 0;
+        const flush = (closed: boolean) => {
+          if (closed && sub.length >= 3) addBox(sub);
+          else for (let s = 1; s < sub.length; s++) addBox([sub[s - 1]!, sub[s]!]); // open lines: each segment
+          sub = [];
+        };
+        while (k < data.length) {
+          const op = data[k++];
+          if (op === 0) { flush(false); sub.push(at(data[k]!, data[k + 1]!)); k += 2; }
+          else if (op === 1) { sub.push(at(data[k]!, data[k + 1]!)); k += 2; }
+          else if (op === 2) { sub.push(at(data[k + 4]!, data[k + 5]!)); k += 6; }
+          else if (op === 3) { sub.push(at(data[k + 2]!, data[k + 3]!)); k += 4; }
+          else if (op === 4) flush(true);
+          else break;
+        }
+        flush(false);
+        continue;
+      }
+      // Older pdf.js: only the overall bounding box is known.
       const mm = args[args.length - 1] as ArrayLike<number> | null;
       if (!mm || mm.length < 4 || ![mm[0], mm[1], mm[2], mm[3]].every(Number.isFinite)) continue;
-      const pts = [[mm[0]!, mm[1]!], [mm[2]!, mm[1]!], [mm[0]!, mm[3]!], [mm[2]!, mm[3]!]].map(([x, y]) => [x! * m[0] + y! * m[2] + m[4], x! * m[1] + y! * m[3] + m[5]]);
-      const xs = pts.map((p) => p[0]!), ys = pts.map((p) => p[1]!);
-      const x = Math.min(...xs), y = Math.min(...ys), w = Math.max(...xs) - x, h = Math.max(...ys) - y;
-      if (w >= 30 && h <= 2.5) rules.push({ page, x1: x, x2: x + w, y });
-      else if (w >= 24 && h >= 24 && w < 500) rects.push({ page, x, y, w, h });
-      else if (w >= 6 && w <= 20 && h >= 6 && h <= 20 && Math.abs(w - h) <= 4) rects.push({ page, x, y, w, h }); // a printed tick box
+      addBox([at(mm[0]!, mm[1]!), at(mm[2]!, mm[1]!), at(mm[0]!, mm[3]!), at(mm[2]!, mm[3]!)]);
+    }
+  }
+  // Character grids drawn as dividers: evenly spaced vertical strokes of the same height make cells.
+  const groups = new Map<string, number[]>();
+  for (const v of verticals) {
+    const key = `${Math.round(v.y1)}:${Math.round(v.y2)}`;
+    groups.set(key, [...(groups.get(key) ?? []), v.x]);
+  }
+  for (const [key, xs] of groups) {
+    const [y1, y2] = key.split(':').map(Number) as [number, number];
+    const sorted = [...new Set(xs.map((x) => Math.round(x * 2) / 2))].sort((a, b) => a - b);
+    for (let i = 1; i < sorted.length; i++) {
+      const w = sorted[i]! - sorted[i - 1]!;
+      if (w >= 6 && w <= 28) rects.push({ page, x: sorted[i - 1]!, y: y1, w, h: y2 - y1 });
     }
   }
   return { rules, rects };
@@ -205,6 +285,8 @@ export interface Candidate {
   required: boolean;
   options?: { text: string; itemId?: string }[];
   include: boolean;
+  /** Set when the place to write is already known (one part of a captioned line). */
+  box?: PdfBox;
 }
 
 const LABEL_HINT = /\b(name|surname|mobile|phone|e-?mail|date of birth|dob|gender|sex|address|house|building|street|locality|town|village|city|post office|pin ?code|postal|tehsil|taluk|district|state|country|father|mother|husband|wife|guardian|relative|relationship|place|date|age|occupation|qualification|nationality|aadha+r|epic|percentage)\b/i;
@@ -268,6 +350,92 @@ export async function aiCandidates(items: TextItem[], pages: PageSize[]): Promis
 
 /** Places an answer box to the right of the label, up to the next label on the line or the margin. */
 /**
+ * A line with captions printed under it, like
+ *   Name: ______________________________________________
+ *         (Surname)     (Name)    (Father Name)   (Mother Name)
+ * is four answers, not one. Each caption becomes its own question, written on its part of the line.
+ */
+export function splitCaptioned(cands: Candidate[], items: TextItem[], rules: Rule[]): Candidate[] {
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const captionIds = new Set<string>();
+  const out: Candidate[] = [];
+  for (const cand of cands) {
+    const it = byId.get(cand.itemId);
+    if (!it || cand.options?.length || captionIds.has(cand.itemId)) { if (!captionIds.has(cand.itemId)) out.push(cand); continue; }
+    // A long line on the label's row or just below it.
+    const line = rules
+      .filter((r) => r.page === it.page && r.y <= it.y + 4 && r.y >= it.y - 26 && r.x2 - r.x1 >= 150 && r.x1 <= it.x + it.w + 40)
+      .sort((a, b) => b.y - a.y)[0];
+    if (!line) { out.push(cand); continue; }
+    const caps = items
+      .filter((o) => o.page === it.page && o.y < line.y - 2 && o.y >= line.y - 20 && o.x + o.w > line.x1 && o.x < line.x2)
+      .flatMap((o) => [...o.text.matchAll(/\(([^()]{2,30})\)/g)].map((m) => {
+        // Where in the item the caption sits (items like ") (Surname)" carry leftovers).
+        const cw = o.w / Math.max(1, o.text.length);
+        const x = o.x + (m.index ?? 0) * cw;
+        return { id: o.id, text: m[1]!.trim(), x, w: m[0].length * cw };
+      }))
+      .filter((c) => !/block|capital|letters|optional|if any/i.test(c.text))
+      .sort((a, b) => a.x - b.x);
+    if (caps.length < 2) { out.push(cand); continue; }
+    const block = items.some((o) => o.page === it.page && o.y >= line.y - 20 && o.y <= it.y + 4 && /block letters|capital letters/i.test(o.text));
+    const centers = caps.map((c) => c.x + c.w / 2);
+    const startX = line.y < it.y - 6 ? line.x1 : Math.max(line.x1, it.x + it.w + 4);
+    caps.forEach((c, k) => {
+      const x1 = k === 0 ? startX : (centers[k - 1]! + centers[k]!) / 2;
+      const x2 = k === caps.length - 1 ? line.x2 : (centers[k]! + centers[k + 1]!) / 2;
+      captionIds.add(c.id);
+      const base = cleanLabel(cand.label).replace(/\s*\(.*\)\s*$/, '');
+      const label = /^name$/i.test(c.text) && /name/i.test(base) ? 'First name' : /name/i.test(c.text) || !base ? c.text : `${base}: ${c.text}`;
+      out.push({ ...cand, itemId: k ? `${cand.itemId}c${k}` : cand.itemId, label: block ? `${label} (block letters)` : label, box: { x: x1 + 2, y: line.y + 1, w: x2 - x1 - 6, h: Math.max(14, it.h + 4) } });
+    });
+  }
+  // The captions themselves aren't questions.
+  return out.filter((c) => !captionIds.has(c.itemId) || c.box);
+}
+
+/** A row of character boxes (PRN, mobile number) to the right of a label, plus any rows stacked under it. */
+function cellRow(it: TextItem, start: number, rects: Rect[], nextLabelX: number): PdfBox[] | null {
+  const mid = it.y + it.h / 3;
+  const small = dedupe(rects.filter((r) => r.page === it.page && r.w >= 8 && r.w <= 28 && r.h >= 8 && r.h <= 30));
+  const row = (y: number, h: number, x0: number) => {
+    const same = small.filter((r) => Math.abs(r.y - y) <= 1.5 && Math.abs(r.h - h) <= 2).sort((a, b) => a.x - b.x);
+    const run: Rect[] = [];
+    for (const r of same) {
+      if (r.x < x0 - 1) continue;
+      if (!run.length || r.x - (run[run.length - 1]!.x + run[run.length - 1]!.w) <= 3) run.push(r);
+      else break;
+    }
+    return run;
+  };
+  const first = small
+    .filter((r) => r.x >= start - 8 && r.x < nextLabelX && mid >= r.y - 3 && mid <= r.y + r.h + 3)
+    .sort((a, b) => a.x - b.x)[0];
+  if (!first) return null;
+  const run = row(first.y, first.h, first.x);
+  if (run.length < 4) return null;
+  const cells: PdfBox[] = run.map(({ x, y, w, h }) => ({ x, y, w, h }));
+  // Grids that continue on the next row (long names): same start, directly below.
+  let below = first;
+  for (let n = 0; n < 2; n++) {
+    const next = small.find((r) => Math.abs(r.x - run[0]!.x) <= 3 && r.y < below.y - 2 && r.y >= below.y - below.h - 6);
+    if (!next) break;
+    const more = row(next.y, next.h, next.x);
+    if (more.length < 4) break;
+    cells.push(...more.map(({ x, y, w, h }) => ({ x, y, w, h })));
+    below = next;
+  }
+  return cells;
+}
+
+/** Filled and stroked copies of the same cell, or a cell drawn twice: keep one. */
+function dedupe(rs: Rect[]): Rect[] {
+  const out: Rect[] = [];
+  for (const r of rs) if (!out.some((o) => Math.abs(o.x - r.x) <= 1.5 && Math.abs(o.y - r.y) <= 1.5 && Math.abs(o.w - r.w) <= 2)) out.push(r);
+  return out;
+}
+
+/**
  * Places an answer box for each question. Preference order:
  * 1. the printed answer line (underline or ‘____’) to the right of the label, exactly as wide as the line;
  * 2. otherwise the space up to the next label, stopping before any drawn frame (a photo box) and inside
@@ -282,8 +450,10 @@ export function placeBoxes(c: Candidate[], items: TextItem[], pages: PageSize[],
   const used = new Set<Rule>();
 
   for (const cand of c) {
-    const it = byId.get(cand.itemId);
+    const it = byId.get(cand.itemId.replace(/c\d+$/, ''));
     if (!it) continue;
+    // One part of a captioned line: its place is already known.
+    if (cand.box) { boxes[cand.itemId] = { page: it.page, box: cand.box }; continue; }
     const pw = pages[it.page]?.width ?? 612;
     const pageRules = rules.filter((r) => r.page === it.page);
     const sameLine = items.filter((o) => o.page === it.page && Math.abs(o.y - it.y) <= 3 && o.x > it.x + it.w - 1);
@@ -294,14 +464,34 @@ export function placeBoxes(c: Candidate[], items: TextItem[], pages: PageSize[],
     const h = Math.max(14, it.h + 6);
 
     let box: PdfBox | null = null;
+    // 0. A row of character boxes: one character per box.
+    const cells = cand.options?.length ? null : cellRow(it, start, rects, nextLabel ? nextLabel.x : pw);
+    if (cells) {
+      const xs = cells.map((b) => b.x), ys = cells.map((b) => b.y);
+      const x = Math.min(...xs), y = Math.min(...ys);
+      boxes[cand.itemId] = {
+        page: it.page,
+        box: { x, y, w: Math.max(...cells.map((b) => b.x + b.w)) - x, h: Math.max(...cells.map((b) => b.y + b.h)) - y },
+        cells,
+      };
+      continue;
+    }
     // 1. The answer line printed for this label: on (or just under) the text's baseline, starting to its right.
     const line = pageRules
       .filter((r) => !used.has(r) && r.y <= it.y + 4 && r.y >= it.y - 8 && r.x2 > start + 20 && r.x1 >= it.x + it.w - 12 && (!nextLabel || r.x1 < nextLabel.x))
       .sort((a, b) => a.x1 - b.x1)[0];
+    // 1b. A label alone on its row, with its line printed underneath (“Name:” then “________”).
+    const under = line ? undefined : pageRules
+      .filter((r) => !used.has(r) && r.y < it.y - 6 && r.y >= it.y - 26 && Math.abs(r.x1 - it.x) <= 30 && r.x2 - r.x1 >= 100)
+      .filter((r) => !items.some((o) => o.page === it.page && o.id !== it.id && labelIds.has(o.id) && Math.abs(o.y - r.y) <= 4 && o.x < r.x2))
+      .sort((a, b) => b.y - a.y)[0];
     if (line) {
       used.add(line);
       const x = Math.max(line.x1, start - 2);
       box = { x, y: line.y + 1, w: line.x2 - x, h };
+    } else if (under && !nextLabel && sameLine.every((o) => o.text.length <= 6)) {
+      used.add(under);
+      box = { x: under.x1 + 2, y: under.y + 1, w: under.x2 - under.x1 - 4, h };
     } else {
       // 2. Up to the next label, a tall frame (photo box) on this line, or the cell it starts in.
       const lineTop = it.y + it.h + 2, lineBottom = it.y - 6;
@@ -355,13 +545,13 @@ export function flatPlan(fileName: string, title: string, pages: PageSize[], can
   cands.filter((c) => c.include && boxes[c.itemId]).forEach((c, i) => {
     const b = boxes[c.itemId]!;
     const id = `q${i + 1}`;
-    const raw = byId.get(c.itemId)?.text ?? c.label;
+    const raw = (c.box ? '' : byId.get(c.itemId)?.text) || c.label;
     const control = /signature|thumb impression/i.test(c.label) ? 'signature' : /photo/i.test(c.label) ? 'file' : c.type;
     const { support, reason } = classifySupport(c.label, control);
     const options = c.options?.map((o) => o.text);
     questions.push({
       id, label: c.label, type: options?.length && c.type === 'text' ? 'choice' : c.type, options, required: c.required, support, supportReason: reason,
-      source: { kind: 'pdf-flat', fileName, page: b.page, box: b.box, more: b.more, optionBoxes: b.optionBoxes, uppercase: /block letters|capital letters/i.test(raw + ' ' + c.label) },
+      source: { kind: 'pdf-flat', fileName, page: b.page, box: b.box, more: b.more, cells: b.cells, optionBoxes: b.optionBoxes, uppercase: /block letters|capital letters/i.test(raw + ' ' + c.label) },
     });
     layout.boxes[id] = b;
   });
@@ -421,6 +611,10 @@ export class PdfFiller implements FieldWriter {
     const v = this.toPdfValue(q, value);
     if (q.source.kind === 'pdf-flat') {
       if (!q.source.optionBoxes || !q.options?.length) this.assertEncodable(v);
+      if (q.source.cells?.length) {
+        const n = q.source.cells.length;
+        if (cellChars(q, v, n).length > n) throw new Error(`This field allows at most ${n} characters`);
+      }
       this.flatValues.set(q.id, v);
       this.flatValues.set(`${q.id}:orig`, value);
       return;
@@ -464,6 +658,7 @@ export class PdfFiller implements FieldWriter {
   segments(q: FormQuestion, text?: string): Segment[] {
     const v = text ?? this.flatValues.get(q.id);
     if (v === undefined || q.source.kind !== 'pdf-flat') return [];
+    if (q.source.cells?.length) return cellText(this.font, q.source.cells, cellChars(q, v, q.source.cells.length));
     return layoutText(this.font, [q.source.box, ...(q.source.more ?? [])], v);
   }
 
@@ -488,8 +683,12 @@ export class PdfFiller implements FieldWriter {
         }
         continue;
       }
-      // Long answers wrap onto the printed lines below (no pdf-lib maxWidth: it wraps into overlapping lines).
-      for (const seg of layoutText(this.font, [q.source.box, ...(q.source.more ?? [])], v)) {
+      // Character boxes get one character each; long answers wrap onto the printed lines below
+      // (no pdf-lib maxWidth: it wraps into overlapping lines).
+      const segs = q.source.cells?.length
+        ? cellText(this.font, q.source.cells, cellChars(q, v, q.source.cells.length))
+        : layoutText(this.font, [q.source.box, ...(q.source.more ?? [])], v);
+      for (const seg of segs) {
         page.drawText(seg.text, { x: seg.box.x + 2, y: seg.box.y + Math.max(2, (seg.box.h - seg.size) / 2 + 1), size: seg.size, font: this.font, color });
       }
     }
@@ -542,4 +741,29 @@ export function layoutText(font: PDFFont, boxes: PdfBox[], text: string): Segmen
     if (line) out.push({ box, text: line, size });
   });
   return out;
+}
+
+/**
+ * The characters that go into a row of boxes. Numbers lose their spaces and dashes (and a leading +91
+ * when the boxes only fit the 10-digit number); text keeps a blank box between words if it fits.
+ */
+export function cellChars(q: FormQuestion, v: string, n: number): string[] {
+  if (q.type === 'phone' || /^[\d\s+()-]+$/.test(v)) {
+    let d = v.replace(/[^\d]/g, '');
+    if (d.length > n && d.length === n + 2 && d.startsWith('91')) d = d.slice(2);
+    return [...d];
+  }
+  const chars = [...v.trim().replace(/\s+/g, ' ')];
+  return chars.length <= n ? chars : chars.filter((c) => c !== ' ');
+}
+
+/** One character centred in each box, sized to the box. */
+export function cellText(font: PDFFont, cells: PdfBox[], chars: string[]): Segment[] {
+  return chars.slice(0, cells.length).flatMap((ch, i) => {
+    const cell = cells[i]!;
+    if (ch === ' ') return [];
+    const size = Math.max(6, Math.min(12, cell.h - 4, cell.w * 0.95));
+    const w = font.widthOfTextAtSize(ch, size);
+    return [{ box: { x: cell.x + (cell.w - w) / 2 - 2, y: cell.y, w: w + 4, h: cell.h }, text: ch, size }];
+  });
 }

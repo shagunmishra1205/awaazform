@@ -25,7 +25,13 @@ export function BoxEditor({ bytes, pages, candidates, boxes, onChange, onBoxes }
   const setBox = (id: string, option: string | undefined, b: PdfBox) => {
     const cur = boxes[id];
     if (!cur) return;
-    onBoxes({ ...boxes, [id]: option ? { ...cur, optionBoxes: { ...cur.optionBoxes, [option]: b } } : { ...cur, box: b } });
+    if (option) return onBoxes({ ...boxes, [id]: { ...cur, optionBoxes: { ...cur.optionBoxes, [option]: b } } });
+    // Moving an answer moves its continuation lines and character boxes with it; resizing drops the
+    // character boxes (the answer is then written as plain text in the new box).
+    const dx = b.x - cur.box.x, dy = b.y - cur.box.y;
+    const moved = b.w === cur.box.w && b.h === cur.box.h;
+    const shift = (x: PdfBox) => ({ ...x, x: x.x + dx, y: x.y + dy });
+    onBoxes({ ...boxes, [id]: { ...cur, box: b, more: cur.more?.map(shift), cells: moved ? cur.cells?.map(shift) : undefined } });
   };
 
   const onPointerDown = (e: PointerEvent, id: string, option: string | undefined, mode: Drag['mode'], scale: number) => {
@@ -128,7 +134,7 @@ export function BoxEditor({ bytes, pages, candidates, boxes, onChange, onBoxes }
                     onPointerDown={(e) => onPointerDown(e, c.itemId, undefined, 'resize', scale)} />
                 </div>
                 {/* Lines a long answer continues on: shown, not dragged (they follow the printed lines). */}
-                {b.more?.map((mb, i) => (
+                {[...(b.more ?? []), ...(b.cells ?? [])].map((mb, i) => (
                   <div key={`m${i}`} aria-hidden className="pointer-events-none absolute rounded-[3px]"
                     style={{ ...boxStyle(mb, pages[page]!, scale), border: `1px dashed ${color}`, opacity: sel ? 0.9 : 0.45 }} />
                 ))}

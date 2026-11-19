@@ -19,7 +19,8 @@ export type FormSource =
   | { kind: 'docx'; fileName: string; slot: string }
   | { kind: 'pdf-acroform'; fileName: string; fieldName: string }
   /** `more`: blank lines below the box (e.g. an address's second and third lines) that long answers wrap onto. */
-  | { kind: 'pdf-flat'; fileName: string; page: number; box: PdfBox; more?: PdfBox[]; optionBoxes?: Record<string, PdfBox>; uppercase?: boolean }
+  /** `cells`: a row of character boxes (PRN, mobile number): one character per cell. */
+  | { kind: 'pdf-flat'; fileName: string; page: number; box: PdfBox; more?: PdfBox[]; cells?: PdfBox[]; optionBoxes?: Record<string, PdfBox>; uppercase?: boolean }
   | { kind: 'fixture'; name: string };
 
 export type SupportStatus = 'supported' | 'limited' | 'manual' | 'unsupported';
