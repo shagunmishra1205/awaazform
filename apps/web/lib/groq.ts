@@ -7,6 +7,8 @@ export const config = {
   key: process.env.GROQ_API_KEY ?? '',
   sttModel: process.env.GROQ_STT_MODEL || 'whisper-large-v3-turbo',
   chatModel: process.env.GROQ_CHAT_MODEL ?? '',
+  /** Used when the chat model hits a rate limit (per-minute or per-day). Must support tool calls. */
+  chatFallback: process.env.GROQ_CHAT_FALLBACK ?? 'openai/gpt-oss-20b',
   ttsModel: process.env.GROQ_TTS_MODEL ?? '',
   ttsVoice: process.env.GROQ_TTS_VOICE ?? '',
   maxAudioBytes: Number(process.env.MAX_AUDIO_BYTES) || 2_000_000,
@@ -47,4 +49,18 @@ export function errorResponse(err: unknown): Response {
   const status = err instanceof GroqError ? err.status : 500;
   const message = err instanceof GroqError ? err.message : 'Something went wrong';
   return Response.json({ error: message, fallback: 'typing' }, { status });
+}
+
+/**
+ * A chat completion on the configured model, retried once on the fallback model if the main one is
+ * rate-limited (free tiers cap tokens per minute and per day). `body` builds the request for a model.
+ */
+export async function chatCompletion(body: (model: string) => Record<string, unknown>): Promise<Response> {
+  const send = (model: string) => groqFetch('/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body(model)) });
+  try {
+    return await send(config.chatModel);
+  } catch (err) {
+    if (!(err instanceof GroqError) || err.status !== 429 || !config.chatFallback || config.chatFallback === config.chatModel) throw err;
+    return send(config.chatFallback);
+  }
 }

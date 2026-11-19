@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { config, errorResponse, groqFetch } from '@/lib/groq';
+import { chatCompletion, config, errorResponse } from '@/lib/groq';
 import { rateLimit, tooMany } from '@/lib/rate-limit';
 import { guard, preflight, withCors } from '@/lib/guard';
 
@@ -47,21 +47,17 @@ async function handlePost(req: Request): Promise<Response> {
     const { page, pageSize, items } = parsed.data;
     const listing = items.map((i) => `${i.id}\t${i.x}\t${i.y}\t${i.text}`).join('\n');
 
-    const res = await groqFetch('/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: config.chatModel,
+    const res = await chatCompletion((model) => ({
+        model,
         temperature: 0,
         max_tokens: 5000,
-        reasoning_effort: 'low',
+        ...(/gpt-oss/.test(model) ? { reasoning_effort: 'low' } : {}),
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: SYSTEM },
           { role: 'user', content: `Page ${page + 1}, ${Math.round(pageSize.width)}x${Math.round(pageSize.height)} points.\n\nid\tx\ty\ttext\n${listing}` },
         ],
-      }),
-    });
+    }));
     const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
     let data: unknown;
     try {

@@ -1,5 +1,5 @@
 import { LANGUAGES, questionContext, systemPrompt, toolDeclarations, type FormQuestion, type Language, type OutlineItem } from '@awaazform/core';
-import { config, errorResponse, groqFetch } from '@/lib/groq';
+import { chatCompletion, config, errorResponse } from '@/lib/groq';
 import { rateLimit, tooMany } from '@/lib/rate-limit';
 import { guard, preflight, withCors } from '@/lib/guard';
 
@@ -40,15 +40,12 @@ async function handlePost(req: Request): Promise<Response> {
       }
     }
 
-    const res = await groqFetch('/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: config.chatModel,
+    const res = await chatCompletion((model) => ({
+        model,
         temperature: 0.2,
         max_tokens: 1200,
         // gpt-oss models reason before answering; low effort keeps voice replies quick.
-        ...(/gpt-oss/.test(config.chatModel) ? { reasoning_effort: 'low' } : {}),
+        ...(/gpt-oss/.test(model) ? { reasoning_effort: 'low' } : {}),
         messages: [
           { role: 'system', content: systemPrompt({ formTitle: String(body.formTitle).slice(0, 200), profileLabel: String(body.profileLabel).slice(0, 60), language: LANGUAGES.includes(body.language) ? body.language : 'en' }) },
           { role: 'system', content: `Current question: ${questionContext(body.question, body.position?.index ?? 0, body.position?.total ?? 0)}` },
@@ -58,8 +55,7 @@ async function handlePost(req: Request): Promise<Response> {
           ...messages,
         ],
         ...(body.noTools ? {} : { tools: toolDeclarations(), tool_choice: 'auto' }),
-      }),
-    });
+    }));
     const json = (await res.json()) as { choices?: { message?: Msg }[] };
     const message = json.choices?.[0]?.message;
     if (!message || message.role !== 'assistant') return Response.json({ error: 'Empty reply' }, { status: 502 });
