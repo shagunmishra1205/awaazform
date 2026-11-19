@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "AwaazForm",
+  "version": "0.2.0",
+  "description": "Fill Google Forms, Microsoft Forms and web forms by voice, in English and 12 Indian languages. Every answer is checked with you first. Never submits.",
+  "minimum_chrome_version": "116",
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "action": { "default_title": "AwaazForm", "default_icon": { "16": "icons/16.png", "32": "icons/32.png" } },
+  "background": { "service_worker": "background.js" },
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": [
+    "https://docs.google.com/forms/*",
+    "https://forms.office.com/*",
+    "https://forms.microsoft.com/*",
+    "https://forms.cloud.microsoft/*"
+  ],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://docs.google.com/forms/*", "https://forms.office.com/*", "https://forms.microsoft.com/*", "https://forms.cloud.microsoft/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    { "resources": ["widget.html"], "matches": ["https://*/*", "http://*/*"] }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  }
+}
