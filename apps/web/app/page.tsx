@@ -21,7 +21,7 @@ export default function Home() {
   const h = t.home;
   const WAYS = [
     { n: '01', title: h.way1_title, body: h.way1_body, href: '/form', cta: h.way1_cta, tags: ['Google Forms', 'Microsoft Forms'] },
-    { n: '02', title: h.way2_title, body: h.way2_body, href: '/pdf', cta: h.way2_cta, alt: { href: '/docx', label: h.way2_alt }, tags: ['PDF', 'Word .docx'] },
+    { n: '02', title: h.way2_title, body: h.way2_body, href: '/documents', cta: h.way2_cta, tags: ['PDF', 'Word .docx'] },
     { n: '03', title: h.way3_title, body: h.way3_body, href: '/extension', cta: h.way3_cta, tags: ['Chrome', 'Edge'] },
   ];
   const ASSIST = [[h.a1_t, h.a1_b], [h.a2_t, h.a2_b], [h.a3_t, h.a3_b], [h.a4_t, h.a4_b], [h.a5_t, h.a5_b], [h.a6_t, h.a6_b]] as const;
@@ -98,7 +98,6 @@ export default function Home() {
                 </ul>
                 <div className="flex flex-wrap gap-2 pt-2">
                   <Link href={w.href} className="btn">{w.cta} →</Link>
-                  {'alt' in w && w.alt && <Link href={w.alt.href} className="btn btn-ghost">{w.alt.label}</Link>}
                 </div>
               </Reveal>
             ))}
@@ -216,8 +215,7 @@ export default function Home() {
           <Reveal delay={0.08}><h2 className="max-w-[520px] text-[clamp(2rem,4vw,2.75rem)]"><Rich text={h.cta_title} /></h2></Reveal>
           <Reveal delay={0.16} className="flex flex-wrap justify-center gap-3">
             <Link href="/form" className="btn">{h.cta_form}</Link>
-            <Link href="/pdf" className="btn btn-ghost">{h.cta_pdf}</Link>
-            <Link href="/docx" className="btn btn-ghost">{h.cta_docx}</Link>
+            <Link href="/documents" className="btn btn-ghost">{h.cta_doc}</Link>
           </Reveal>
         </div>
       </section>

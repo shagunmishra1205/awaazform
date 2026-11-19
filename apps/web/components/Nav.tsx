@@ -53,8 +53,7 @@ export function Nav() {
 
   const links = [
     { href: '/form', label: t.nav.form },
-    { href: '/pdf', label: t.nav.pdf },
-    { href: '/docx', label: t.nav.docx },
+    { href: '/documents', label: t.nav.documents },
     { href: '/extension', label: t.nav.extension },
     { href: '/report', label: t.nav.report },
     { href: '/profiles', label: t.nav.profiles },

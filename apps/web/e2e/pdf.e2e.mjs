@@ -30,13 +30,13 @@ async function answer(label, value) {
 }
 
 try {
-  await page.goto(`${BASE}/pdf`);
+  await page.goto(`${BASE}/documents`);
   await page.evaluate(async () => { localStorage.clear(); await new Promise((r) => { const d = indexedDB.deleteDatabase('awaazform'); d.onsuccess = d.onerror = d.onblocked = r; }); });
   await page.reload();
-  await page.getByRole('heading', { name: 'Fill a PDF by voice' }).waitFor();
+  await page.getByRole('heading', { name: /Fill a document/ }).waitFor();
   await shot('pdf-upload');
 
-  await page.getByLabel('Choose a PDF').setInputFiles(FORM);
+  await page.getByLabel('Choose a file').setInputFiles(FORM);
   await page.getByRole('heading', { name: 'Check the questions and boxes' }).waitFor({ timeout: 90_000 });
   const how = await page.locator('h1 + p').innerText();
   console.log('Review:', how.slice(0, 140));

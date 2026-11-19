@@ -1,9 +1,9 @@
 'use client';
 
 import { createSession, type FieldType, type FormQuestion, type Session } from '@awaazform/core';
-import { useEffect, useRef, useState, type DragEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { DocumentUpload } from '@/components/documents/DocumentUpload';
 import { DocxSurface } from '@/components/docx/DocxSurface';
-import { Reveal, Wave } from '@/components/Motion';
 import { SessionWorkspace } from '@/components/SessionWorkspace';
 import { db } from '@/lib/db';
 import { DocxDoc, docxQuestions, MAX_DOCX_BYTES } from '@/lib/docx';
@@ -35,7 +35,8 @@ function questionsFor(doc: DocxDoc, c: DocxChoices): FormQuestion[] {
   }));
 }
 
-export default function DocxPage() {
+/** One document flow (upload → review → fill). `file` starts it; otherwise it resumes a stored session. */
+export function DocxFlow({ file, onPick }: { file?: File; onPick: (f: File) => void }) {
   const { settings, t } = useSettings();
   const W = t.docx;
   const [step, setStep] = useState<Step>({ s: 'upload' });
@@ -43,6 +44,7 @@ export default function DocxPage() {
 
   // FR-22: resume a Word session stored in this browser.
   useEffect(() => {
+    if (file) return void onFile(file);
     (async () => {
       const stored = await getFile(FILE_ID);
       const saved = await loadSession(DOCX_KEY);
@@ -51,6 +53,7 @@ export default function DocxPage() {
       const questions = questionsFor(doc, stored.plan as DocxChoices);
       setStep({ s: 'fill', bytes: stored.bytes, doc, questions, session: saved, resumed: Object.values(saved.answers).some((a) => a.status !== 'pending') });
     })().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const onFile = async (file: File) => {
@@ -160,45 +163,5 @@ export default function DocxPage() {
     );
   }
 
-  return <UploadView reading={step.s === 'reading' ? step.name : null} error={step.s === 'upload' ? step.error : undefined} onFile={onFile} />;
-}
-
-function UploadView({ reading, error, onFile }: { reading: string | null; error?: string; onFile: (f: File) => void }) {
-  const { t } = useSettings();
-  const W = t.docx;
-  const [over, setOver] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const onDrop = (e: DragEvent) => {
-    e.preventDefault();
-    setOver(false);
-    const f = e.dataTransfer.files[0];
-    if (f) onFile(f);
-  };
-  return (
-    <div className="container-x max-w-3xl py-12 md:py-16">
-      <Reveal className="text-center">
-        <p className="text-xs font-medium tracking-wide text-muted uppercase">{W.eyebrow}</p>
-        <h1 className="mt-2 text-[clamp(2rem,4vw,2.75rem)]"><Rich text={W.title} /></h1>
-        <p className="mx-auto mt-3 max-w-lg text-muted">{W.lead}</p>
-      </Reveal>
-      <Reveal delay={0.08}>
-        <div onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={onDrop}
-          className="card mt-10 grid place-items-center gap-4 border-2 border-dashed p-10 text-center transition-colors"
-          style={{ borderColor: over ? 'var(--accent)' : 'var(--border)', background: over ? 'var(--violet-100)' : undefined }}>
-          {reading ? (
-            <p role="status" className="flex items-center gap-3 text-muted"><span style={{ color: 'var(--accent)' }}><Wave bars={6} /></span> {fmt(W.reading, { name: reading })}</p>
-          ) : (
-            <>
-              <p className="font-semibold">{W.drop}</p>
-              <button type="button" className="btn btn-lg" onClick={() => inputRef.current?.click()}>{W.choose}</button>
-              <input ref={inputRef} type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="sr-only"
-                aria-label={W.choose} onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ''; }} />
-              <p className="text-sm text-muted">{W.kinds}</p>
-            </>
-          )}
-          {error && <p role="alert" className="w-full rounded-[var(--r-12)] p-4 text-sm font-medium" style={{ background: 'var(--amber-100)', color: 'var(--amber-700)' }}>{error}</p>}
-        </div>
-      </Reveal>
-    </div>
-  );
+  return <DocumentUpload reading={step.s === 'reading' ? step.name : null} error={step.s === 'upload' ? step.error : undefined} onFile={onPick} />;
 }

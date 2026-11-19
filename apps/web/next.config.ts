@@ -22,6 +22,13 @@ const csp = directives("'self'");
 
 const nextConfig: NextConfig = {
   transpilePackages: ['@awaazform/core'],
+  // PDFs and Word files share one page now; keep old links working.
+  async redirects() {
+    return [
+      { source: '/pdf', destination: '/documents', permanent: true },
+      { source: '/docx', destination: '/documents', permanent: true },
+    ];
+  },
   async headers() {
     return [
       {

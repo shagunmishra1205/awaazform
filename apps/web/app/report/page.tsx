@@ -20,8 +20,7 @@ export default function ReportPage() {
     void loadLastSession().then((s) => {
     setReport(s ? buildReport(s) : null);
     const kind = s?.questions[0]?.source.kind;
-    if (kind?.startsWith('pdf')) setBase('/pdf');
-    else if (kind === 'docx') setBase('/docx');
+    if (kind?.startsWith('pdf') || kind === 'docx') setBase('/documents');
     else if (kind === 'dom') setBase('/extension');
     });
   }, []);

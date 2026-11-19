@@ -40,10 +40,10 @@ const answer = async (text, shown = text) => {
 };
 
 try {
-  await page.goto(`${BASE}/docx`);
+  await page.goto(`${BASE}/documents`);
   await page.evaluate(() => { localStorage.clear(); indexedDB.deleteDatabase('awaazform'); });
-  await page.goto(`${BASE}/docx`, { waitUntil: 'networkidle' });
-  await page.getByLabel('Choose a Word file').setInputFiles({ name: 'scholarship.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from(docx) });
+  await page.goto(`${BASE}/documents`, { waitUntil: 'networkidle' });
+  await page.getByLabel('Choose a file').setInputFiles({ name: 'scholarship.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from(docx) });
   await page.getByRole('heading', { name: 'Check the questions' }).waitFor();
   const labels = await page.locator('ol input.field-input').evaluateAll((els) => els.map((e) => e.value));
   assert.deepEqual(labels, ['Full name', 'Category', 'Date of birth', 'Mobile number', "Father's name", 'Bank account password']);

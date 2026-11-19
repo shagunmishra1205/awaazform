@@ -68,7 +68,8 @@ async function ask(lang, batch) {
   const body = {
     model: MODEL,
     temperature: 0.2,
-    max_completion_tokens: 6000,
+    // Groq counts the requested maximum against the per-minute budget, so keep it close to what a batch needs.
+    max_completion_tokens: Math.min(3000, 250 + Math.ceil(JSON.stringify(batch).length * (/ur|ml|ta|te|kn/.test(lang) ? 3 : 2.2))),
     response_format: { type: 'json_object' },
     ...(MODEL.includes('gpt-oss') ? { reasoning_effort: 'low' } : {}),
     messages: [
@@ -97,10 +98,12 @@ Rules:
         signal: AbortSignal.timeout(90_000),
       });
     } catch {
+      process.stdout.write('n');
       await sleep(5000 * (attempt + 1)); // network blip: back off and retry
       continue;
     }
     if (res.status === 429 || res.status >= 500) {
+      process.stdout.write(res.status === 429 ? 'r' : 's');
       const wait = Number(res.headers.get('retry-after')) || 10;
       await sleep(Math.min(60, wait + 1) * 1000);
       continue;

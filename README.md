@@ -39,7 +39,7 @@ Bolu **listens**, **writes down** what you said, **checks** it, and **reads it b
 
 **Paste a Google Form or Microsoft Form link** (short `forms.gle` / `forms.office.com/r/…` links or long ones, with or without `https://`). AwaazForm reads the public form, you answer each question by voice or text, and **Open in Google Forms** opens the real form with your confirmed answers already filled in, across every section. Microsoft Forms get a pre-filled link when the form's owner allows it, and a copy-your-answers list when they don't. You check it and press Submit. No install, and it works on phones.
 
-**Upload a PDF or a Word file.** Fillable and printed PDFs, and `.docx` forms with `Name: ______` blanks, ☐ option boxes, empty table cells or Word content controls. Everything is filled in your browser and downloaded.
+**Upload a PDF or a Word file** on the Documents page. Fillable and printed PDFs, and `.docx` forms with `Name: ______` blanks, ☐ option boxes, empty table cells or Word content controls. Everything is filled in your browser and downloaded.
 
 **Or use the browser extension** ([`apps/extension`](apps/extension), downloadable from the site's Extension page). Bolu, our robot, waits in the corner of Google Forms, Microsoft Forms and ordinary web forms: talk to him, check each answer, and he types it into the real form.
 
