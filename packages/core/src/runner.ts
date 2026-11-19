@@ -2,7 +2,7 @@
 // to the timeline, and routes fills through the controller's confirm gate.
 import type { SessionController } from './controller';
 import { buildReport, reportToMarkdown } from './report';
-import { isSensitive } from './safety';
+import { isSensitive, suggestCanonicalKey } from './safety';
 import { describeCall, toolSchemas } from './tools';
 import { TOOL_NAMES, type CanonicalKey, type FormQuestion, type ToolName } from './types';
 
@@ -35,7 +35,7 @@ export interface ToolOutcome {
 
 export class ToolRunner {
   /** Profile values the user agreed to use in this session; a `profile` fill must match one. */
-  private approvedProfileValues = new Set<string>();
+  private approvedProfileValues = new Map<string, CanonicalKey>();
 
   constructor(private ctl: SessionController, private host: ToolHost) {}
 
@@ -99,8 +99,11 @@ export class ToolRunner {
         const value = String(args.value);
         // Files are only ever chosen by the user, with the file picker. The model can't attach one.
         if (q!.type === 'file') throw new Error('The user chooses files themselves with the Choose a file button.');
-        if (source === 'profile' && !this.approvedProfileValues.has(value)) {
-          throw new Error('Profile values can only be proposed after the user agrees via lookup_profile.');
+        if (source === 'profile') {
+          const key = this.approvedProfileValues.get(value);
+          if (!key) throw new Error('Profile values can only be proposed after the user agrees via lookup_profile.');
+          // A saved detail only goes into the question that asks for it (no saved name in “Name of event”).
+          if (suggestCanonicalKey(q!) !== key) throw new Error(`The saved ${key.replace(/_/g, ' ')} doesn't belong in this question. Ask the user instead.`);
         }
         const r = this.ctl.propose(q!.id, value, source);
         if (!r.ok) throw new Error(r.error);
@@ -117,7 +120,7 @@ export class ToolRunner {
       case 'lookup_profile': {
         const v = await this.host.requestProfileUse(args.key as CanonicalKey);
         if (v === null) return JSON.stringify({ used: false, note: 'The user declined or nothing is saved. Ask them instead.' });
-        this.approvedProfileValues.add(v);
+        this.approvedProfileValues.set(v, args.key as CanonicalKey);
         return JSON.stringify({ used: true, value: v });
       }
 

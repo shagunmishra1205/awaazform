@@ -30,7 +30,7 @@ const descriptions: Record<ToolName, string> = {
   propose_fill: 'Propose a value for a question. This only queues the value; the user must confirm before anything is filled.',
   read_back: 'Read a normalized value back to the user, aloud and on screen.',
   explain_field: 'Explain what a question is asking, in plain language. Never suggest what the answer should be.',
-  lookup_profile: "Ask the user whether to use a value saved in their profile. Returns the value only if they agree.",
+  lookup_profile: "Ask the user whether to use a value saved in their profile, for a question that asks for exactly that detail of the person filling the form (their own name, email, phone, date of birth or address; not a parent's, company's or event's). Returns the value only if they agree.",
   offer_save: 'After a confirmed answer, ask the user whether to remember it for next time.',
   highlight_field: 'Highlight a field in the form so the user can see it.',
   verify_field: 'Read a filled field back from the form and check it matches the confirmed answer.',

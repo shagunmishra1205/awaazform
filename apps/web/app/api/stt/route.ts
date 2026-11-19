@@ -22,7 +22,8 @@ async function handlePost(req: Request): Promise<Response> {
     const body = new FormData();
     body.set('file', audio, 'answer.webm');
     body.set('model', config.sttModel);
-    body.set('response_format', 'json');
+    // verbose_json gives per-segment confidence, so silence and noise can be dropped (see below).
+    body.set('response_format', 'verbose_json');
     body.set('temperature', '0');
     if (typeof language === 'string' && (LANGUAGES as readonly string[]).includes(language)) body.set('language', language);
     // Context for Whisper: the question being answered (no personal data), capped well under its limit.
@@ -30,8 +31,8 @@ async function handlePost(req: Request): Promise<Response> {
     if (typeof prompt === 'string' && prompt.trim()) body.set('prompt', prompt.slice(0, 600));
 
     const res = await groqFetch('/audio/transcriptions', { method: 'POST', body });
-    const json = (await res.json()) as { text?: string };
-    return Response.json({ text: (json.text ?? '').trim() });
+    const json = (await res.json()) as { text?: string; segments?: Segment[] };
+    return Response.json({ text: cleanTranscript(json) });
   } catch (err) {
     return errorResponse(err);
   }
@@ -45,3 +46,23 @@ export async function POST(req: Request) {
 }
 
 export const OPTIONS = preflight;
+
+interface Segment { text?: string; no_speech_prob?: number; avg_logprob?: number; compression_ratio?: number }
+
+// What Whisper "hears" in silence, breathing or room noise. Dropped when the whole clip is just this.
+const HALLUCINATIONS = /^(thank you( for watching)?|thanks( for watching)?|bye|you|okay|subtitles? by .*|please subscribe.*|धन्यवाद|शुक्रिया|सब्सक्राइब.*|नमस्ते|ধন্যবাদ|நன்றி|ధన్యవాదాలు|ಧನ್ಯವಾದ|നന്ദി|ਧੰਨਵਾਦ|شکریہ)[.!। ]*$/iu;
+
+/**
+ * Live Mode sends whatever the room sounded like. Whisper turns silence into its language tag
+ * (<|hi|>) or stock phrases, which then arrived as if the user had said them. Keep only segments it
+ * is reasonably sure are speech, strip special tokens, and drop known silence phrases.
+ */
+function cleanTranscript(json: { text?: string; segments?: Segment[] }): string {
+  const segs = json.segments?.length ? json.segments : null;
+  const kept = segs
+    ? segs.filter((s) => (s.no_speech_prob ?? 0) < 0.6 && (s.avg_logprob ?? 0) > -1.2 && (s.compression_ratio ?? 1) < 2.6).map((s) => s.text ?? '').join(' ')
+    : json.text ?? '';
+  const text = kept.replace(/<\|[^|>]{1,20}\|>/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!/[\p{L}\p{N}]/u.test(text) || HALLUCINATIONS.test(text)) return '';
+  return text;
+}

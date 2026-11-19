@@ -61,3 +61,34 @@ describe('profile encryption (FR-36)', () => {
     await expect(decryptValue(wrong, ct)).rejects.toThrow();
   });
 });
+
+describe('suggestCanonicalKey only matches the person’s own details', () => {
+  const k = (label: string, type: FormQuestion['type'] = 'text') => suggestCanonicalKey({ label, type });
+  it('matches the obvious ones', () => {
+    expect(k('Full name')).toBe('full_name');
+    expect(k('Your Name')).toBe('full_name');
+    expect(k('Name (In English in BLOCK LETTERS)')).toBe('full_name');
+    expect(k('Name *')).toBe('full_name');
+    expect(k('Email address', 'email')).toBe('email');
+    expect(k('Mobile number', 'phone')).toBe('phone');
+    expect(k('Date of birth', 'date')).toBe('date_of_birth');
+    expect(k('PIN code', 'number')).toBe('postal_code');
+    expect(k('State', 'dropdown')).toBe('state');
+  });
+  it('does not put saved data where it does not belong', () => {
+    expect(k('Name of Event')).toBeNull();
+    expect(k("Father's name")).toBeNull();
+    expect(k('Company name')).toBeNull();
+    expect(k('School name')).toBeNull();
+    expect(k('Emergency contact number', 'phone')).toBeNull();
+    expect(k('Parent email', 'email')).toBeNull();
+    expect(k('State your reason for applying', 'paragraph')).toBeNull();
+    expect(k('Date', 'date')).toBeNull();
+    expect(k('Date of your event', 'date')).toBeNull();
+    expect(k('What are the excellent practices in SISC that you would like us to maintain?', 'paragraph')).toBeNull();
+    expect(k('Course/Level (Write NA if not applicable.)')).toBeNull();
+    expect(k('Department/Campus')).toBeNull();
+    expect(k('Location')).toBeNull();
+    expect(k('Office address')).toBeNull();
+  });
+});

@@ -274,7 +274,9 @@ export function SessionWorkspace(props: WorkspaceProps) {
 
     const key = suggestCanonicalKey(cq);
     const fresh = a.status === 'pending' || a.status === 'invalid';
-    const saved = key && fresh && cq.support !== 'unsupported' ? await savedValue(key) : null;
+    const found = key && fresh && cq.support !== 'unsupported' ? await savedValue(key) : null;
+    // Offer a saved detail only if it is a valid answer here (a saved name never goes into a date field).
+    const saved = found && validateAnswer(cq, found).ok ? found : null;
     if (key && saved) {
       c.emit({ type: 'profile.offered', key });
       setOffer({ kind: 'use', key, value: saved });

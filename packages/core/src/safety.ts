@@ -52,18 +52,34 @@ export function classifySupport(label: string, control: RawControl): { support: 
 }
 
 /** Suggests a canonical key for a question. The user confirms the mapping once (FR-32). */
+// Which saved detail (if any) a question asks for. It must be the person's OWN detail: “Father's name”,
+// “Name of event”, “Company email”, “Emergency contact number” and “State your reason” are not.
+// Wrong guesses put saved data in the wrong place, so this errs on the side of offering nothing.
+
+/** Someone or something other than the person filling the form. */
+const SOMEONE_ELSE = /father|mother|guardian|parent|spouse|husband|wife|nominee|referee|reference|emergency|child|son\b|daughter|sibling|brother|sister|manager|supervisor|teacher|principal|doctor|witness|landlord|employer|company|organi[sz]ation|institut|school|college|university|event|team|project|product|business|shop|office|department|course|program|bank|branch|hospital|vehicle|pet|friend|relative|contact person|पिता|माता|पति|पत्नी|अभिभावक|संस्था|कंपनी|स्कूल|कॉलेज/i;
+const QUESTION_LIKE = /\?|\b(why|how|what|which|when|describe|explain|tell us|reason|comment|feedback|suggest)\b/i;
+
 export function suggestCanonicalKey(q: Pick<FormQuestion, 'label' | 'type'>): CanonicalKey | null {
-  const l = q.label.toLowerCase();
-  if (isSensitive(q.label)) return null;
-  if (q.type === 'email' || /e-?mail|ईमेल/.test(l)) return 'email';
-  if (q.type === 'phone' || /phone|mobile|contact number|फ़ोन|फोन|मोबाइल/.test(l)) return 'phone';
-  if (/date of birth|\bdob\b|birth ?date|जन्म तिथि|जन्मतिथि/.test(l)) return 'date_of_birth';
-  if (/(full )?name|नाम/.test(l) && !/father|mother|guardian|parent|spouse|company|school|college|पिता|माता/.test(l)) return 'full_name';
-  if (/address line 2|address 2/.test(l)) return 'address_line2';
-  if (/address|पता/.test(l)) return 'address_line1';
-  if (/\bcity\b|town|शहर/.test(l)) return 'city';
-  if (/\bstate\b|राज्य/.test(l)) return 'state';
-  if (/pin ?code|postal|zip|पिन कोड/.test(l)) return 'postal_code';
-  if (/country|देश/.test(l)) return 'country';
+  const raw = q.label.trim();
+  const l = raw.toLowerCase().replace(/[*:：]+\s*$/u, '').trim();
+  if (isSensitive(raw) || l.length > 70 || SOMEONE_ELSE.test(l)) return null;
+  // Long free-text questions and choices are never a saved detail (a state or country list is, below).
+  if (q.type === 'paragraph' || q.type === 'checkbox' || q.type === 'multichoice' || q.type === 'yesno' || q.type === 'scale' || q.type === 'file') return null;
+  const own = /^(your|my|applicant'?s?|candidate'?s?|student'?s?|participant'?s?|employee'?s?|customer'?s?|patient'?s?|आपका|आपकी|अपना)\s+/i;
+  const core = l.replace(own, '').replace(/\s*\((.*?)\)\s*/g, ' ').trim();
+  const choiceOk = q.type === 'choice' || q.type === 'dropdown';
+
+  if (!choiceOk && (q.type === 'email' || /^(e-?mail|email address|email id|mail id|ईमेल)(\s+address)?$/.test(core))) return 'email';
+  if (!choiceOk && (q.type === 'phone' || /^(phone|mobile|cell|whatsapp|contact)(\s+(no\.?|number|num))?$|^(phone|mobile) number$|^(फ़ोन|फोन|मोबाइल)(\s+नंबर)?$/.test(core))) return 'phone';
+  if (!choiceOk && /^(date of birth|dob|birth ?date|birthday|जन्म तिथि|जन्मतिथि|जन्म की तारीख)$/.test(core)) return 'date_of_birth';
+  if (!choiceOk && (q.type === 'text') && /^((full|complete|legal)\s+)?name(\s+in\s+(full|english|block letters|capital letters))?$|^name of (the )?(applicant|candidate|student|participant|person|respondent)$|^(नाम|पूरा नाम)$/.test(core)) return 'full_name';
+  if (!choiceOk && /^(address line 2|address 2|apartment, suite.*)$/.test(core)) return 'address_line2';
+  if (!choiceOk && /^((home|residential|current|permanent|postal|mailing)\s+)?address(\s+line\s*1)?$|^(पता|घर का पता)$/.test(core)) return 'address_line1';
+  if (/^(city|town|city\s*\/\s*town|शहर)$/.test(core)) return 'city';
+  if (/^(state|state\s*\/\s*(province|ut)|province|राज्य)$/.test(core)) return 'state';
+  if (!choiceOk && /^(pin ?code|pin|postal code|postcode|zip( code)?|पिन कोड|पिनकोड)$/.test(core)) return 'postal_code';
+  if (/^(country|देश)$/.test(core)) return 'country';
+  if (QUESTION_LIKE.test(l)) return null;
   return null;
 }
