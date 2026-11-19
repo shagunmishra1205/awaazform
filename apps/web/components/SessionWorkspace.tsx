@@ -129,9 +129,9 @@ export function SessionWorkspace(props: WorkspaceProps) {
       addTurn('ai', text);
       setLive('speaking');
       bargedIn.current = false;
-      liveRef.current?.setBoost(2.5);
+      liveRef.current?.setSpeaking(true, latest.current.settings.bargeIn);
       await speakSentences(text, voiceOpts(), () => bargedIn.current);
-      liveRef.current?.setBoost(1);
+      liveRef.current?.setSpeaking(false);
       setLive((s) => (s === 'off' ? 'off' : 'listening'));
       return;
     }

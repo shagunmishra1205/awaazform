@@ -392,6 +392,8 @@ export const en = {
     automatic: 'Automatic',
     no_voices: 'This browser reports no voice for {language}. Install one in your phone or computer’s language settings; until then answers are shown on screen.',
     test: 'Test voice',
+    barge_in: 'Let me interrupt Bolu by talking (use headphones)',
+    barge_in_hint: 'On speakers the microphone hears Bolu, so he would interrupt himself. Leave this off unless you wear headphones.',
     test_phrase: 'Hello, I am AwaazForm.',
     privacy: 'Privacy and security',
     confirm_title: 'Checking answers in Live Mode',

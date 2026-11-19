@@ -81,6 +81,10 @@ export default function SettingsPage() {
               </span>
             )}
           </label>
+          <label className="flex min-h-11 items-start gap-3 text-sm">
+            <input type="checkbox" className="mt-1 h-5 w-5 flex-none" checked={settings.bargeIn} onChange={(e) => update({ bargeIn: e.target.checked })} />
+            <span className="grid gap-1"><span className="font-medium">{S.barge_in}</span><span className="text-muted">{S.barge_in_hint}</span></span>
+          </label>
           <button type="button" className="btn btn-ghost w-fit"
             onClick={() => speak(S.test_phrase, { language: settings.language, rate: settings.speechRate, voiceURI: settings.voiceURI })}>
             {S.test}

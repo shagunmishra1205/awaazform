@@ -92,7 +92,10 @@ export function stopSpeaking() {
 
 /** Speaks text; resolves when finished. Tries Groq TTS once, then uses the browser voice. */
 export async function speak(text: string, opts: { language: Language; rate?: number; voiceURI?: string }): Promise<void> {
+  const busy = typeof speechSynthesis !== 'undefined' && (speechSynthesis.speaking || speechSynthesis.pending);
   stopSpeaking();
+  // Chrome can silently drop an utterance queued in the same tick as cancel(); give it a moment.
+  if (busy) await new Promise((r) => setTimeout(r, 60));
   speaking = true;
   try {
     await speakInner(text, opts);

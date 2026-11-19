@@ -104,6 +104,8 @@ let timer: ReturnType<typeof setInterval> | null = null;
 const turns: { who: 'you' | 'ai'; text: string }[] = [];
 /** Conversational: answers are noted as you talk and read back together before anything is filled. */
 let confirmMode: 'end' | 'each' = 'end';
+/** Let the user interrupt Bolu by talking (headphones). Off: on speakers he would hear himself. */
+let bargeIn = false;
 let reviewing = false;
 const endMode = () => phase === 'live' && confirmMode === 'end';
 const proposedList = () => { const s = session(); return s ? s.questions.filter((q) => s.answers[q.id]?.status === 'proposed') : []; };
@@ -287,9 +289,9 @@ async function say(text: string) {
   setBolu('speaking');
   render();
   bargedIn = false;
-  liveListener?.setBoost(2.5);
+  liveListener?.setSpeaking(true, bargeIn);
   await speakSentences(text, voiceOpts(), () => bargedIn);
-  liveListener?.setBoost(1);
+  liveListener?.setSpeaking(false);
   if (liveState === 'speaking') liveState = 'listening';
   setBolu(phase === 'live' ? 'listening' : 'idle');
   render();
@@ -614,8 +616,9 @@ function endLive() {
 // Wiring
 
 async function init() {
-  const stored = await chrome.storage.local.get(['server', 'language', 'confirmMode']).catch(() => ({} as Record<string, unknown>));
+  const stored = await chrome.storage.local.get(['server', 'language', 'confirmMode', 'bargeIn']).catch(() => ({} as Record<string, unknown>));
   if (stored.confirmMode === 'each') confirmMode = 'each';
+  bargeIn = stored.bargeIn === true;
   if (typeof stored.server === 'string' && stored.server) server = stored.server;
   setApiBase(server);
   const nav = navigator.language.slice(0, 2) as Language;

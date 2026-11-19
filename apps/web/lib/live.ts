@@ -29,6 +29,9 @@ export class LiveListener {
   private startedAt = 0;
   private paused = false;
   private boost = 1;
+  private startMs = START_MS;
+  private speakingHold = false;
+  private tail: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private cb: LiveCallbacks) {}
 
@@ -62,18 +65,46 @@ export class LiveListener {
     this.boost = b;
   }
 
+  /**
+   * AwaazForm is talking. Browsers don't cancel speechSynthesis output from the microphone, so on
+   * speakers Bolu hears himself: that was read as the user interrupting (cutting him off at once) and
+   * even sent in as an answer. By default we stop listening while he talks and for a short tail after.
+   * With `allowBargeIn` (headphones), only sustained, loud speech counts as an interruption.
+   */
+  setSpeaking(on: boolean, allowBargeIn = false) {
+    if (this.tail) clearTimeout(this.tail);
+    this.tail = null;
+    if (on) {
+      if (allowBargeIn) {
+        this.boost = 3;
+        this.startMs = 500;
+      } else {
+        this.speakingHold = true;
+        this.abortUtterance();
+      }
+      return;
+    }
+    this.boost = 1;
+    this.startMs = START_MS;
+    // The last syllable is still in the room for a moment.
+    this.tail = setTimeout(() => {
+      this.speakingHold = false;
+      this.abortUtterance();
+    }, 350);
+  }
+
   private frame(rms: number) {
     const threshold = Math.max(this.floor * 3, 0.015) * this.boost;
     const loud = rms > threshold;
     if (!this.inSpeech && !loud) this.floor = this.floor * 0.95 + rms * 0.05; // track background noise
-    if (this.paused) return;
+    if (this.paused || this.speakingHold) return;
 
     if (loud) {
       this.silenceMs = 0;
       this.speechMs += FRAME_MS;
       // Start recording on the first loud frame so the onset isn't lost; confirm it after START_MS.
       if (!this.rec) this.beginRecording();
-      if (!this.inSpeech && this.speechMs >= START_MS) {
+      if (!this.inSpeech && this.speechMs >= this.startMs) {
         this.inSpeech = true;
         this.startedAt = Date.now() - this.speechMs;
         this.cb.onSpeechStart();

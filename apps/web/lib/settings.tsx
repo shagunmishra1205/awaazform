@@ -15,9 +15,11 @@ export interface Settings {
   privacyShield: boolean;
   /** Live Mode: confirm all answers in one summary at the end, or each one as it comes. */
   confirmMode: 'end' | 'each';
+  /** Interrupt Bolu by talking. Off by default: on speakers the microphone hears him. */
+  bargeIn: boolean;
 }
 
-const DEFAULTS: Settings = { language: 'en', contrast: 'normal', text: 'normal', motion: 'system', speechRate: 1, voiceURI: '', privacyShield: true, confirmMode: 'end' };
+const DEFAULTS: Settings = { language: 'en', contrast: 'normal', text: 'normal', motion: 'system', speechRate: 1, voiceURI: '', privacyShield: true, confirmMode: 'end', bargeIn: false };
 const KEY = 'awaazform.settings';
 
 export function loadSettings(): Settings {
