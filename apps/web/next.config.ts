@@ -5,7 +5,8 @@ const isDev = process.env.NODE_ENV !== 'production';
 // PRD §7: CSP and security headers. Fonts are self-hosted by next/font, so everything is 'self'.
 const directives = (frameAncestors: string) => [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ''}`,
+  // 'wasm-unsafe-eval': Live Mode's voice detector (Silero via ONNX) is WebAssembly; it allows compiling wasm only, not eval.
+  `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${isDev ? " 'unsafe-eval'" : ''}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self'",

@@ -357,3 +357,39 @@ export function cleanSpokenAnswer(type: string, raw: string): string {
   for (const re of TAILS) v = v.replace(re, '');
   return v.trim().replace(/^[,:-]\s*/, '') || raw.trim();
 }
+
+// ---- Turn-taking helpers for Live Mode -------------------------------------------------------
+
+/**
+ * Whether someone stopped mid-sentence ("my email is…", "and…", "मेरा नाम…"). Live Mode then waits a
+ * moment for the rest instead of answering half a thought.
+ */
+export function looksUnfinished(text: string): boolean {
+  const v = text.normalize('NFC').trim().toLowerCase();
+  if (!v) return false;
+  if (/[,;:–-]$/.test(v)) return true;
+  // "my name", "मेरा नाम", "माझं नाव": said what, but not yet the answer.
+  if (/(?:^|\s)(my|your|मेरा|मेरी|मेरे|माझं|माझे|माझा|माझी|mera|meri)\s+[\p{L}\p{M}]+$/u.test(v)) return true;
+  return /(?:^|\s)(and|or|but|so|because|my|is|are|the|a|an|to|of|at|in|with|dot|underscore|hyphen|um+|uh+|like|और|या|लेकिन|मेरा|मेरी|मेरे|का|की|के|को|से|में|एट|डॉट|आणि|किंवा|माझं|माझे|माझा|माझी|चा|ची|चे)$/u.test(v);
+}
+
+/**
+ * A clear, short answer that needs no AI round trip: an email, phone, number, date or time that
+ * validates once taken out of the sentence, or a short name/word in Latin letters. Returns the value to
+ * propose, or null to let the AI interpret it (several answers at once, other scripts, anything unclear).
+ */
+export function quickValue(type: string, raw: string): string | null {
+  const v = raw.trim();
+  if (!v || v.split(/\s+/).length > 12) return null;
+  if (/\s(and|aur|और|आणि)\s|,/.test(v) && type !== 'email') return null; // possibly several answers
+  const clean = cleanSpokenAnswer(type, v);
+  switch (type) {
+    case 'email': return /^[\w.+-]+@[\w-]+(\.[\w-]+)+$/.test(clean) ? clean : null;
+    case 'phone': return normalizePhone(clean) ? clean : null;
+    case 'number': return normalizeNumber(clean) ? clean : null;
+    case 'date': return normalizeDate(clean) ? clean : null;
+    case 'time': return normalizeTime(clean) ? clean : null;
+    case 'text': return /^[A-Za-z][A-Za-z .'-]{0,60}$/.test(clean) && clean.split(/\s+/).length <= 4 ? clean : null;
+    default: return null;
+  }
+}

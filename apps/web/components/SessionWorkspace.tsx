@@ -1,7 +1,7 @@
 'use client';
 
 import {
-  canSave, cleanSpokenAnswer, commandWords, createShield, matchOption, parseVoiceCommand, SessionController, suggestCanonicalKey, ToolRunner, validateAnswer,
+  canSave, cleanSpokenAnswer, commandWords, createShield, looksUnfinished, matchOption, parseVoiceCommand, quickValue, SessionController, suggestCanonicalKey, ToolRunner, validateAnswer,
   type CanonicalKey, type FieldWriter, type FormQuestion, type Language, type Profile, type Session, type ToolHost,
 } from '@awaazform/core';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -15,7 +15,8 @@ import { applyEvent, Timeline, type TimelineCard } from '@/components/Timeline';
 import { AiUnavailable, assistantTurn, explainQuestion, fallbackExplanation, type ChatMsg } from '@/lib/assistant';
 import { db, ensureDefaultProfile, saveValue } from '@/lib/db';
 import { fmt, LANGUAGE_META, localizeMessage, Rich, type Strings } from '@/lib/i18n';
-import { LiveListener } from '@/lib/live';
+import { thinkingSound } from '@/lib/earcon';
+import { createListener, type Listener } from '@/lib/vad';
 import { translateQuestions, type QuestionTexts } from '@/lib/question-i18n';
 import { saveSession } from '@/lib/session-store';
 import { useSettings } from '@/lib/settings';
@@ -114,7 +115,9 @@ export function SessionWorkspace(props: WorkspaceProps) {
   const ctlRef = useRef<SessionController | null>(null);
   const runnerRef = useRef<ToolRunner | null>(null);
   const recRef = useRef<Awaited<ReturnType<typeof startRecording>> | null>(null);
-  const liveRef = useRef<LiveListener | null>(null);
+  const liveRef = useRef<Listener | null>(null);
+  /** The start of a sentence the user hasn't finished yet (“my email is…”), waiting for the rest. */
+  const pendingText = useRef<{ text: string; timer: ReturnType<typeof setTimeout> } | null>(null);
   const historyRef = useRef<ChatMsg[]>([]);
   /** One privacy shield per session, so a value keeps its placeholder across turns. */
   const shieldRef = useRef(createShield());
@@ -398,19 +401,34 @@ export function SessionWorkspace(props: WorkspaceProps) {
 
     // Typed answers are taken literally. The exception: a typed answer to an option question that matches
     // no option ("I study in college") goes to the AI to map onto one, still with read-back and confirm.
-    const needsAi = source === 'spoken' ? !quick : OPTION_TYPES.includes(cq.type) && !validateAnswer(cq, raw).ok;
+    // Clear short answers (an email, phone, number, date, or a short name in Latin letters) also skip it.
+    const instant = source === 'spoken' && !OPTION_TYPES.includes(cq.type) ? quickValue(cq.type, raw) : null;
+    if (instant) raw = instant;
+    const needsAi = source === 'spoken' ? !quick && !instant : OPTION_TYPES.includes(cq.type) && !validateAnswer(cq, raw).ok;
     if (latest.current.aiOn && needsAi) {
       setBusy('thinking');
       // FR-43: a spoken holding line if the AI takes a while.
-      const hold = latest.current.live !== 'off' ? setTimeout(() => void speak(latest.current.t.session.one_moment, voiceOpts()), 1500) : null;
+      const isLive = latest.current.live !== 'off';
+      // A soft "hmm" if it takes a moment, and words only if it takes much longer.
+      const hum = isLive ? setTimeout(() => { if (latest.current.readAloud || isLive) thinkingSound(); }, 350) : null;
+      const hold = isLive ? setTimeout(() => void speak(latest.current.t.session.one_moment, voiceOpts()), 4000) : null;
       const startIndex = c.session.currentIndex;
+      // Live Mode speaks the reply sentence by sentence as it streams in.
+      let speech = Promise.resolve();
+      const onSentence = isLive ? (s: string) => {
+        if (hum) clearTimeout(hum);
+        if (hold) clearTimeout(hold);
+        speech = speech.then(() => say(s));
+      } : undefined;
       try {
-        const { reply, history, proposed } = await assistantTurn(
+        const { reply, history, proposed, streamed } = await assistantTurn(
           { ctl: c, runner, profileLabel: latest.current.profile?.label ?? 'Me', language: latest.current.settings.language, shield: latest.current.settings.privacyShield ? shieldRef.current : undefined },
-          historyRef.current, raw,
+          historyRef.current, raw, onSentence,
         );
         historyRef.current = history;
+        if (hum) clearTimeout(hum);
         if (hold) clearTimeout(hold);
+        await speech;
         setBusy(null);
         const pending = proposed.filter((id) => c.session.answers[id]?.status === 'proposed');
         const others = pending.filter((id) => id !== cq.id).length;
@@ -423,8 +441,10 @@ export function SessionWorkspace(props: WorkspaceProps) {
           return void (await present(c.session.questions.findIndex((x) => x.id === pending[0])));
         }
         if (c.session.currentIndex !== startIndex) return void (await present(c.session.currentIndex));
+        if (reply && streamed) return void setBubble(reply);
         if (reply) return void (await say(reply, true));
       } catch (err) {
+        if (hum) clearTimeout(hum);
         if (hold) clearTimeout(hold);
         if (err instanceof AiUnavailable) {
           setAiOn(false);
@@ -575,7 +595,18 @@ export function SessionWorkspace(props: WorkspaceProps) {
     if (!aiOn) return setNotice(t.session.ai_unavailable);
     if (!voiceInputSupported()) return setNotice(t.session.voice_unavailable);
     stopSpeaking();
-    const listener = new LiveListener({
+    // Waits briefly for the rest of an unfinished sentence (“my email is…”) before answering.
+    const handleText = (text: string) => {
+      const prev = pendingText.current;
+      if (prev) { clearTimeout(prev.timer); pendingText.current = null; }
+      const full = prev ? `${prev.text} ${text}` : text;
+      if (looksUnfinished(full)) {
+        pendingText.current = { text: full, timer: setTimeout(() => { pendingText.current = null; void handleLiveRef.current(full); }, 2500) };
+        return Promise.resolve();
+      }
+      return handleLiveRef.current(full);
+    };
+    const callbacks = {
       onSpeechStart: () => {
         if (isSpeaking()) {
           bargedIn.current = true; // FR-42 barge-in
@@ -583,25 +614,26 @@ export function SessionWorkspace(props: WorkspaceProps) {
         }
         setLive('hearing');
       },
-      onUtterance: async (blob) => {
-        listener.setPaused(true);
+      onUtterance: async (blob: Blob) => {
+        liveRef.current?.setPaused(true);
         setLive('thinking');
         try {
           const c0 = ctlRef.current;
           const text = await transcribe(blob, latest.current.settings.language, sttHint(c0?.session.questions[c0.session.currentIndex]));
-          await handleLiveRef.current(text);
+          await handleText(text);
         } catch (err) {
           const e = err as VoiceError;
           if (e.kind === 'ai') { setNotice(`${t.session.ai_unavailable} (${localizeMessage(latest.current.t, e.message)})`); stopLive(); return; }
         } finally {
-          listener.setPaused(false);
+          liveRef.current?.setPaused(false);
           setLive((s) => (s === 'off' ? 'off' : 'listening'));
         }
       },
       onLevel: setLevel,
-    });
+    };
+    let listener: Listener;
     try {
-      await listener.start();
+      listener = await createListener(callbacks);
     } catch {
       return setNotice(t.session.voice_unavailable);
     }
@@ -613,7 +645,27 @@ export function SessionWorkspace(props: WorkspaceProps) {
   const handleLiveRef = useRef(handleLiveText);
   handleLiveRef.current = handleLiveText;
 
+  /** Tap Bolu or press Space: stop talking and listen. Works on speakers, unlike voice barge-in. */
+  const interrupt = useCallback(() => {
+    if (!isSpeaking()) return;
+    bargedIn.current = true;
+    stopSpeaking();
+  }, []);
+  useEffect(() => {
+    if (live === 'off') return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (e.code !== 'Space' || el?.closest('input, textarea, select, button, [contenteditable="true"]')) return;
+      if (!isSpeaking()) return;
+      e.preventDefault();
+      interrupt();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [live, interrupt]);
+
   const stopLive = () => {
+    if (pendingText.current) { clearTimeout(pendingText.current.timer); pendingText.current = null; }
     liveRef.current?.stop();
     liveRef.current = null;
     stopSpeaking();
@@ -742,7 +794,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
                 <h2 id="review-h" className="text-2xl">{t.session.review_title}</h2>
                 <p className="mt-1 text-sm text-muted">{t.session.review_hint}</p>
               </div>
-              {live !== 'off' && <LivePanel state={live} level={level} t={t} turns={turns} words={commandWords(lang)} />}
+              {live !== 'off' && <LivePanel state={live} level={level} t={t} turns={turns} words={commandWords(lang)} onInterrupt={interrupt} />}
               <ol className="grid gap-2">
                 {session.questions.map((x, i) => {
                   const a = session.answers[x.id];
@@ -824,7 +876,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
                 <form className="grid gap-2" onSubmit={(e) => { e.preventDefault(); void submit(input, 'typed'); }}>
                   <label htmlFor="answer" className="sr-only">{t.session.your_answer}</label>
                   {live !== 'off' ? (
-                    <LivePanel state={live} level={level} t={t} turns={turns} words={commandWords(lang)} />
+                    <LivePanel state={live} level={level} t={t} turns={turns} words={commandWords(lang)} onInterrupt={interrupt} />
                   ) : null}
                   {OPTION_TYPES.includes(q.type) && optionsOf(q).length > 0 && (
                     <OptionPicker key={q.id} q={q} t={t} shown={qt[q.id]?.options} disabled={!!busy} onPick={(v) => void submit(v, 'typed')} />
@@ -938,7 +990,7 @@ function OfferCard({ offer, q, lang, profileLabel, t, onDecide, reduceMotion }: 
   );
 }
 
-function LivePanel({ state, level, t, turns, words }: { state: LiveState; level: number; t: Strings; turns: Turn[]; words: Record<string, string> }) {
+function LivePanel({ state, level, t, turns, words, onInterrupt }: { state: LiveState; level: number; t: Strings; turns: Turn[]; words: Record<string, string>; onInterrupt: () => void }) {
   const label: Record<LiveState, string> = { off: '', listening: t.live.listening, hearing: t.live.hearing, thinking: t.live.thinking, speaking: t.live.speaking };
   const logRef = useRef<HTMLOListElement>(null);
   useEffect(() => {
@@ -948,9 +1000,10 @@ function LivePanel({ state, level, t, turns, words }: { state: LiveState; level:
   return (
     <div className="grid gap-3 rounded-[var(--r-16)] p-4" style={{ background: 'var(--ink-950)', color: 'var(--white)' }}>
       <div className="flex items-center gap-4" aria-live="polite">
-        <span className="relative grid h-14 w-14 flex-none place-items-center rounded-full" style={{ background: 'var(--ink-700)' }}>
+        <button type="button" onClick={onInterrupt} disabled={state !== 'speaking'} aria-label={t.live.interrupt} title={state === 'speaking' ? t.live.interrupt : undefined}
+          className="relative grid h-14 w-14 flex-none place-items-center rounded-full disabled:cursor-default" style={{ background: 'var(--ink-700)' }}>
           <Bolu size={48} head state={state === 'thinking' ? 'thinking' : state === 'speaking' ? 'speaking' : 'listening'} level={level} />
-        </span>
+        </button>
         <span className="text-sm font-medium">{label[state]}</span>
       </div>
       {turns.length > 0 ? (

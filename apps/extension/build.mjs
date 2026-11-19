@@ -41,6 +41,10 @@ await build({
 
 for (const f of ['manifest.json', 'background.js', 'content.js', 'widget.html', 'widget.css', 'permission.html', 'permission.js']) cpSync(join(here, f), join(dist, f));
 cpSync(join(here, 'icons'), join(dist, 'icons'), { recursive: true });
+// Live Mode's voice detector (Silero + ONNX WebAssembly), served from the extension itself.
+const vadAssets = join(web, 'public/vad');
+if (existsSync(vadAssets)) cpSync(vadAssets, join(dist, 'vad'), { recursive: true });
+else console.warn('extension: public/vad missing (run the web prebuild); Live Mode will use the simpler voice detector');
 // Translations, without the bookkeeping the translation script keeps.
 const locales = join(web, 'lib/i18n/locales');
 if (existsSync(locales)) {

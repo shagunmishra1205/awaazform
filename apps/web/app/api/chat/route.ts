@@ -21,6 +21,8 @@ interface ChatBody {
   messages: Msg[];
   /** When set, the model may not call tools — used for explain-only requests. */
   noTools?: boolean;
+  /** Stream the reply (server-sent events), so speech can start with the first sentence. */
+  stream?: boolean;
 }
 
 /**
@@ -56,7 +58,9 @@ async function handlePost(req: Request): Promise<Response> {
           ...messages,
         ],
         ...(body.noTools ? {} : { tools: toolDeclarations(), tool_choice: 'auto' }),
+        ...(body.stream ? { stream: true } : {}),
     }));
+    if (body.stream && res.body) return new Response(relay(res.body), { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform' } });
     const json = (await res.json()) as { choices?: { message?: Msg }[] };
     const message = json.choices?.[0]?.message;
     if (!message || message.role !== 'assistant') return Response.json({ error: 'Empty reply' }, { status: 502 });
@@ -75,3 +79,42 @@ export async function POST(req: Request) {
 }
 
 export const OPTIONS = preflight;
+
+/**
+ * Re-emits Groq's stream as small events: `{"c": text}` for reply text and `{"t": [...]}` for tool-call
+ * pieces. The model's hidden reasoning is dropped here and never reaches the browser.
+ */
+function relay(src: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  let buffer = '';
+  return new ReadableStream<Uint8Array>({
+    async start(ctrl) {
+      const reader = src.getReader();
+      const emit = (o: unknown) => ctrl.enqueue(enc.encode(`data: ${JSON.stringify(o)}\n\n`));
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += dec.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, nl).trim();
+            buffer = buffer.slice(nl + 1);
+            if (!line.startsWith('data:')) continue;
+            const data = line.slice(5).trim();
+            if (data === '[DONE]') continue;
+            try {
+              const delta = (JSON.parse(data) as { choices?: { delta?: { content?: string; tool_calls?: unknown[] } }[] }).choices?.[0]?.delta;
+              if (delta?.content) emit({ c: delta.content });
+              if (delta?.tool_calls?.length) emit({ t: delta.tool_calls });
+            } catch { /* a partial or keep-alive line */ }
+          }
+        }
+      } finally {
+        ctrl.enqueue(enc.encode('data: [DONE]\n\n'));
+        ctrl.close();
+      }
+    },
+  });
+}

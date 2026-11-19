@@ -4,3 +4,4 @@ packages:
   - "media"
 allowBuilds:
   esbuild: false
+  protobufjs: false

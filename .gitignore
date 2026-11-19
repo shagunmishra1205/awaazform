@@ -19,3 +19,6 @@ skills-lock.json
 
 # Built by apps/extension/build.mjs (web prebuild)
 apps/web/public/downloads/
+
+# Copied by apps/web/scripts/copy-pdf-worker.mjs
+apps/web/public/vad/

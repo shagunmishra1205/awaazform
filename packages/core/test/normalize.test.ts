@@ -123,3 +123,23 @@ describe('cleanSpokenAnswer', () => {
     expect(cleanSpokenAnswer('number', 'I am 32 years old')).toBe('32');
   });
 });
+
+describe('Live Mode turn-taking helpers', () => {
+  it('notices unfinished sentences', async () => {
+    const { looksUnfinished } = await import('../src');
+    expect(looksUnfinished('my email is')).toBe(true);
+    expect(looksUnfinished('Ayush and')).toBe(true);
+    expect(looksUnfinished('मेरा नाम')).toBe(true);
+    expect(looksUnfinished('Ayush Shukla')).toBe(false);
+    expect(looksUnfinished('मेरा नाम आयुष है')).toBe(false);
+  });
+  it('answers clear short replies without the AI', async () => {
+    const { quickValue } = await import('../src');
+    expect(quickValue('email', 'my email is ayush dot shukla at gmail dot com')).toBe('ayush.shukla@gmail.com');
+    expect(quickValue('phone', 'it is 98440 12345')).toBe('98440 12345');
+    expect(quickValue('text', 'My name is Ayush Shukla')).toBe('Ayush Shukla');
+    expect(quickValue('text', 'मेरा नाम आयुष है')).toBeNull(); // needs romanising: the AI does that
+    expect(quickValue('text', "I'm Ayush and my email is a at b dot com")).toBeNull(); // several answers
+    expect(quickValue('paragraph', 'Great teachers')).toBeNull();
+  });
+});

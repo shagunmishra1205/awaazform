@@ -3,14 +3,15 @@
 // through the content script; the model can only propose, and only the Yes button or a spoken “yes”
 // (matched in code) confirms. Nothing is ever submitted.
 import {
-  cleanSpokenAnswer, commandWords, createSession, createShield, matchOption, LANGUAGES, parseVoiceCommand, SessionController, ToolRunner, validateAnswer,
+  cleanSpokenAnswer, commandWords, createSession, createShield, looksUnfinished, matchOption, quickValue, LANGUAGES, parseVoiceCommand, SessionController, ToolRunner, validateAnswer,
   type FieldWriter, type FormQuestion, type Language, type Session, type ToolHost,
 } from '@awaazform/core';
 import { setApiBase } from '@/lib/api';
 import { AiUnavailable, assistantTurn, fallbackExplanation, type ChatMsg } from '@/lib/assistant';
 import { mountBolu, type BoluState } from '@/lib/bolu';
 import { en, fmt, LANGUAGE_META, localizeMessage, type Strings } from '@/lib/i18n/core';
-import { LiveListener } from '@/lib/live';
+import { thinkingSound } from '@/lib/earcon';
+import { createListener, type Listener } from '@/lib/vad';
 import { formKey, toQuestions, type ScanResult } from '@/lib/page-questions';
 import { translateQuestions, type QuestionTexts } from '@/lib/question-i18n';
 import { isSpeaking, speakSentences, sttHint, stopSpeaking, transcribe, VoiceError, voiceInputSupported } from '@/lib/voice';
@@ -96,7 +97,9 @@ let runner: ToolRunner | null = null;
 let history: ChatMsg[] = [];
 const shield = createShield();
 let storeKey = '';
-let liveListener: LiveListener | null = null;
+let liveListener: Listener | null = null;
+/** The start of a sentence the user hasn't finished (“my email is…”), waiting briefly for the rest. */
+let pending: { text: string; timer: ReturnType<typeof setTimeout> } | null = null;
 let liveState: 'listening' | 'hearing' | 'thinking' | 'speaking' = 'listening';
 let bargedIn = false;
 let picked: string[] = [];
@@ -479,15 +482,24 @@ async function submit(raw: string, source: 'typed' | 'spoken') {
     if (hit) raw = q.options[trOpts.indexOf(hit)] ?? raw;
   }
   const quick = raw.trim().split(/\s+/).length <= 4 && OPTION_TYPES.includes(q.type) && validateAnswer(q, raw).ok;
-  const needsAi = source === 'spoken' ? !quick : OPTION_TYPES.includes(q.type) && !validateAnswer(q, raw).ok;
+  // Clear short answers (email, phone, number, date, a short Latin-letter name) skip the AI too.
+  const instant = source === 'spoken' && !OPTION_TYPES.includes(q.type) ? quickValue(q.type, raw) : null;
+  if (instant) raw = instant;
+  const needsAi = source === 'spoken' ? !quick && !instant : OPTION_TYPES.includes(q.type) && !validateAnswer(q, raw).ok;
   if (needsAi) {
     busy = true;
     liveState = 'thinking';
     setBolu('thinking');
     render();
     const start = c.session.currentIndex;
+    const hum = phase === 'live' ? setTimeout(() => thinkingSound(), 350) : null;
+    // Speak the reply sentence by sentence as it streams in.
+    let speech = Promise.resolve();
+    const onSentence = phase === 'live' ? (s: string) => { if (hum) clearTimeout(hum); speech = speech.then(() => say(s)); } : undefined;
     try {
-      const { reply, history: h, proposed } = await assistantTurn({ ctl: c, runner: r, profileLabel: 'Me', language: lang, shield }, history, raw);
+      const { reply, history: h, proposed, streamed } = await assistantTurn({ ctl: c, runner: r, profileLabel: 'Me', language: lang, shield }, history, raw, onSentence);
+      if (hum) clearTimeout(hum);
+      await speech;
       history = h;
       busy = false;
       const pending = proposed.filter((id) => c.session.answers[id]?.status === 'proposed');
@@ -498,8 +510,10 @@ async function submit(raw: string, source: 'typed' | 'spoken') {
       }
       if (pending.length) return present(c.session.questions.findIndex((x) => x.id === pending[0]));
       if (c.session.currentIndex !== start) return present(c.session.currentIndex);
-      if (reply) return void (await say(reply));
+      if (reply && !streamed) return void (await say(reply));
+      if (reply) return;
     } catch (err) {
+      if (hum) clearTimeout(hum);
       busy = false;
       if (err instanceof AiUnavailable) note = { text: `${t.session.ai_unavailable} (${localizeMessage(t, err.message)})`, tone: 'warn' };
     }
@@ -621,32 +635,43 @@ async function handleSpoken(text: string) {
 async function startLive() {
   if (!ctl) return;
   if (!voiceInputSupported()) { note = { text: t.session.voice_unavailable, tone: 'warn' }; typing = true; return render(); }
-  const listener = new LiveListener({
+  const handleText = (text: string) => {
+    const prev = pending;
+    if (prev) { clearTimeout(prev.timer); pending = null; }
+    const full = prev ? `${prev.text} ${text}` : text;
+    if (looksUnfinished(full)) {
+      pending = { text: full, timer: setTimeout(() => { pending = null; void handleSpoken(full); }, 2500) };
+      return Promise.resolve();
+    }
+    return handleSpoken(full);
+  };
+  const callbacks = {
     onSpeechStart: () => {
       if (isSpeaking()) { bargedIn = true; stopSpeaking(); }
       liveState = 'hearing';
       render();
     },
-    onUtterance: async (blob) => {
-      listener.setPaused(true);
+    onUtterance: async (blob: Blob) => {
+      liveListener?.setPaused(true);
       liveState = 'thinking';
       setBolu('thinking');
       render();
       try {
-        await handleSpoken(await transcribe(blob, lang, sttHint(current())));
+        await handleText(await transcribe(blob, lang, sttHint(current())));
       } catch (err) {
         const e = err as VoiceError;
         if (e.kind === 'ai') note = { text: `${t.session.ai_unavailable} (${localizeMessage(t, e.message)})`, tone: 'warn' };
       } finally {
-        listener.setPaused(muted);
+        liveListener?.setPaused(muted);
         if (liveState !== 'speaking') { liveState = 'listening'; setBolu(phase === 'live' ? 'listening' : 'idle'); }
         render();
       }
     },
-    onLevel: (l) => bolu.setLevel(l),
-  });
+    onLevel: (l: number) => bolu.setLevel(l),
+  };
+  let listener: Listener;
   try {
-    await listener.start();
+    listener = await createListener(callbacks, chrome.runtime.getURL('vad/'));
   } catch {
     note = { text: t.widget.mic_blocked, tone: 'warn' };
     typing = true;
@@ -665,7 +690,15 @@ async function startLive() {
   await present(first >= 0 ? first : s.currentIndex);
 }
 
+/** Tap Bolu or press Space: he stops talking and listens. Works on speakers, unlike voice barge-in. */
+function interrupt() {
+  if (!isSpeaking()) return;
+  bargedIn = true;
+  stopSpeaking();
+}
+
 function endLive() {
+  if (pending) { clearTimeout(pending.timer); pending = null; }
   liveListener?.stop();
   liveListener = null;
   stopSpeaking();
@@ -708,6 +741,14 @@ async function init() {
   await scanPage();
 
   // Keyboard and screen-reader users land in the panel when it opens, and back on Bolu when it closes.
+  const orb = $('orb');
+  orb.setAttribute('role', 'button');
+  orb.tabIndex = 0;
+  orb.onclick = interrupt;
+  window.addEventListener('keydown', (e) => {
+    const el = e.target as HTMLElement | null;
+    if (e.code === 'Space' && isSpeaking() && !el?.closest('input, textarea, select, button')) { e.preventDefault(); interrupt(); }
+  });
   $('fab').onclick = () => {
     open = !open;
     if (!open) { transcriptOpen = false; endLive(); }

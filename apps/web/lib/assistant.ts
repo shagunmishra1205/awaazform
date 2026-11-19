@@ -26,7 +26,9 @@ interface Ctx {
   shield?: Shield;
 }
 
-async function step(ctx: Ctx, messages: ChatMsg[], noTools = false): Promise<Extract<ChatMsg, { role: 'assistant' }>> {
+type Assistant = Extract<ChatMsg, { role: 'assistant' }>;
+
+async function step(ctx: Ctx, messages: ChatMsg[], noTools = false, onText?: (delta: string) => void): Promise<Assistant> {
   const s = ctx.ctl.session;
   const res = await fetch(apiUrl('/api/chat'), {
     method: 'POST',
@@ -40,23 +42,92 @@ async function step(ctx: Ctx, messages: ChatMsg[], noTools = false): Promise<Ext
       outline: noTools ? undefined : formOutline(s.questions, Object.fromEntries(Object.entries(s.answers).map(([k, a]) => [k, a.status]))),
       messages,
       noTools,
+      stream: !!onText,
     }),
   });
-  const json = (await res.json().catch(() => ({}))) as { message?: Extract<ChatMsg, { role: 'assistant' }>; error?: string };
+  if (onText && res.ok && res.headers.get('content-type')?.includes('text/event-stream') && res.body) return readStream(res.body, onText);
+  const json = (await res.json().catch(() => ({}))) as { message?: Assistant; error?: string };
   if (!res.ok || !json.message) throw new AiUnavailable(json.error ?? 'AI is unavailable');
   return json.message;
 }
 
-/** Runs one user turn through the model and tools. Returns the assistant's final words, if any. */
-export async function assistantTurn(ctx: Ctx, history: ChatMsg[], utterance: string): Promise<{ reply: string | null; history: ChatMsg[]; proposed: string[] }> {
+type ToolDelta = { index?: number; id?: string; type?: string; function?: { name?: string; arguments?: string } };
+
+/** Rebuilds one assistant message from the server's stream, passing reply text on as it arrives. */
+async function readStream(body: ReadableStream<Uint8Array>, onText: (delta: string) => void): Promise<Assistant> {
+  const reader = body.getReader();
+  const dec = new TextDecoder();
+  let buffer = '';
+  let content = '';
+  const calls: ToolCallMsg[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += dec.decode(value, { stream: true });
+    let cut: number;
+    while ((cut = buffer.indexOf('\n\n')) >= 0) {
+      const line = buffer.slice(0, cut).trim();
+      buffer = buffer.slice(cut + 2);
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (data === '[DONE]') continue;
+      try {
+        const ev = JSON.parse(data) as { c?: string; t?: ToolDelta[] };
+        if (ev.c) { content += ev.c; onText(ev.c); }
+        for (const d of ev.t ?? []) {
+          const i = d.index ?? calls.length;
+          const call = (calls[i] ??= { id: '', type: 'function', function: { name: '', arguments: '' } });
+          if (d.id) call.id = d.id;
+          if (d.function?.name) call.function.name += d.function.name;
+          if (d.function?.arguments) call.function.arguments += d.function.arguments;
+        }
+      } catch { /* partial event */ }
+    }
+  }
+  const tool_calls = calls.filter(Boolean);
+  return { role: 'assistant', content: content || null, tool_calls: tool_calls.length ? tool_calls : undefined };
+}
+
+/** Splits streamed text into sentences, so speech can start with the first one. */
+function sentenceSplitter(onSentence: (s: string) => void) {
+  let buf = '';
+  return {
+    push(delta: string) {
+      buf += delta;
+      let m: RegExpMatchArray | null;
+      while ((m = buf.match(/^([\s\S]*?[.!?।۔])(\s+|$)/u)) && m[2]) {
+        const sentence = m[1]!.trim();
+        buf = buf.slice(m[0].length);
+        if (sentence) onSentence(sentence);
+      }
+    },
+    flush() {
+      const rest = buf.trim();
+      buf = '';
+      if (rest) onSentence(rest);
+    },
+  };
+}
+
+/**
+ * Runs one user turn through the model and tools. Returns the assistant's final words, if any.
+ * With `onSentence`, the reply streams and each sentence is handed over as soon as it is complete
+ * (`streamed` is then true, and the caller should not speak `reply` again).
+ */
+export async function assistantTurn(
+  ctx: Ctx, history: ChatMsg[], utterance: string, onSentence?: (s: string) => void,
+): Promise<{ reply: string | null; history: ChatMsg[]; proposed: string[]; streamed: boolean }> {
   const proposed: string[] = [];
   const hide = (s: string) => (ctx.shield ? ctx.shield.hide(s) : s);
   const reveal = (s: string) => (ctx.shield ? ctx.shield.reveal(s) : s);
   const messages: ChatMsg[] = [...history, { role: 'user', content: hide(utterance.slice(0, 2000)) }];
+  let streamed = false;
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    const msg = await step(ctx, messages);
+    const split = onSentence ? sentenceSplitter((s) => { streamed = true; onSentence(reveal(s)); }) : null;
+    const msg = await step(ctx, messages, false, split ? (d) => split.push(d) : undefined);
+    split?.flush();
     messages.push({ role: 'assistant', content: msg.content ?? null, tool_calls: msg.tool_calls });
-    if (!msg.tool_calls?.length) return { reply: msg.content ? reveal(msg.content) : null, history: messages, proposed };
+    if (!msg.tool_calls?.length) return { reply: msg.content ? reveal(msg.content) : null, history: messages, proposed, streamed };
     for (const tc of msg.tool_calls) {
       // Real values go back in locally, just before the runner validates the call.
       const args = reveal(tc.function.arguments);
@@ -70,7 +141,7 @@ export async function assistantTurn(ctx: Ctx, history: ChatMsg[], utterance: str
       }
     }
   }
-  return { reply: null, history: messages, proposed };
+  return { reply: null, history: messages, proposed, streamed };
 }
 
 /** FR-18 / J6: plain-language explanation. Never suggests an answer. */
