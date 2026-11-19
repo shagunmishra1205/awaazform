@@ -10,6 +10,11 @@ export interface PdfBox { x: number; y: number; w: number; h: number }
 
 export type FormSource =
   | { kind: 'google-form'; url: string; formId: string; entryId: string }
+  /** `prefill`: the owner allows pre-filled links (Microsoft's AllowPrefill setting). */
+  | { kind: 'ms-form'; url: string; formId: string; questionId: string; prefill?: boolean }
+  /** A question found on a live page by the browser extension; `key` locates it again. */
+  | { kind: 'dom'; url: string; key: string; platform: 'google' | 'microsoft' | 'other' }
+  | { kind: 'docx'; fileName: string; slot: string }
   | { kind: 'pdf-acroform'; fileName: string; fieldName: string }
   | { kind: 'pdf-flat'; fileName: string; page: number; box: PdfBox; optionBoxes?: Record<string, PdfBox>; uppercase?: boolean }
   | { kind: 'fixture'; name: string };
@@ -46,7 +51,12 @@ export interface Answer {
   updatedAt: string;
 }
 
-export type Language = 'en' | 'hi';
+/**
+ * Interface and conversation languages: English and the Indian languages Whisper (our speech-to-text)
+ * understands. Odia is not among them, so it is not offered.
+ */
+export const LANGUAGES = ['en', 'hi', 'bn', 'mr', 'te', 'ta', 'gu', 'ur', 'kn', 'ml', 'pa', 'as', 'ne'] as const;
+export type Language = (typeof LANGUAGES)[number];
 
 export interface Session {
   id: string;
@@ -84,12 +94,22 @@ export interface Profile {
   salt?: string;
   /** Present when encrypted: a known string encrypted with the key, to check the passphrase. */
   verifier?: string;
+  /**
+   * Envelope encryption (v2): a random data key encrypts the values; it is stored wrapped (encrypted)
+   * by each way of unlocking. v1 profiles have no `wrapped` and use the passphrase key directly.
+   */
+  wrapped?: {
+    /** Data key wrapped with the PBKDF2 passphrase key: `iv.ciphertext`. */
+    passphrase?: string;
+    /** Data key wrapped with a key derived from a passkey's PRF output (hardware-backed). */
+    passkey?: { credentialId: string; prfSalt: string; key: string; createdAt: string };
+  };
   fields: Partial<Record<CanonicalKey, ProfileField>>;
 }
 
 export const TOOL_NAMES = [
   'scan_form', 'get_current_question', 'ask_user', 'propose_fill', 'read_back',
-  'explain_field', 'lookup_profile', 'offer_save', 'highlight_field', 'verify_field', 'build_report',
+  'explain_field', 'lookup_profile', 'offer_save', 'highlight_field', 'verify_field', 'build_report', 'go_to_question',
 ] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 

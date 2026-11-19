@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  matchOption, normalizeDate, normalizeEmail, normalizeNumber, normalizePhone,
+  leadingYesNo, matchOption, matchOptions, normalizeDate, normalizeEmail, normalizeNumber, normalizePhone,
   normalizeTime, normalizeYesNo, toAsciiDigits,
 } from '../src/normalize';
 
@@ -47,5 +47,56 @@ describe('normalizers', () => {
     expect(matchOption('sunday', ['Saturday', 'Sunday'])).toBe('Sunday');
     expect(matchOption('s', ['Saturday', 'Sunday'])).toBeNull();
     expect(matchOption('eye', ['Eye check-up', 'Dental'])).toBe('Eye check-up');
+  });
+});
+
+describe('choosing options by voice', () => {
+  const days = ['Saturday', 'Sunday'];
+  const roles = ['Student', 'Teacher', 'Working professional', 'Other'];
+  it('reads positions in English, Hindi and Marathi', () => {
+    expect(matchOption('the second one', roles)).toBe('Teacher');
+    expect(matchOption('option 3', roles)).toBe('Working professional');
+    expect(matchOption('दूसरा', roles)).toBe('Teacher');
+    expect(matchOption('दूसरा वाला', roles)).toBe('Teacher');
+    expect(matchOption('पहिला', roles)).toBe('Student');
+    expect(matchOption('B', roles)).toBe('Teacher');
+    expect(matchOption('last one', roles)).toBe('Other');
+    expect(matchOption('9', roles)).toBeNull();
+  });
+  it('reads numbers on scales as values, not positions', () => {
+    expect(matchOption('three', ['1', '2', '3', '4', '5'])).toBe('3');
+    expect(matchOption('तीन', ['1', '2', '3', '4', '5'])).toBe('3');
+  });
+  it('finds an option named in a sentence, unless negated', () => {
+    expect(matchOption('I am a student', roles)).toBe('Student');
+    expect(matchOption("I'm a working professional", roles)).toBe('Working professional');
+    expect(matchOption('I am not a student', roles)).toBeNull();
+    expect(matchOption('Sunday.', days)).toBe('Sunday');
+  });
+  it('maps common Hindi and Marathi words to English options', () => {
+    expect(matchOption('महिला', ['Male', 'Female', 'Other'])).toBe('Female');
+    expect(matchOption('पुरुष', ['Male', 'Female', 'Other'])).toBe('Male');
+    expect(matchOption('मी विद्यार्थी आहे', roles)).toBe('Student');
+  });
+  it('tolerates small transcription slips but not guesses', () => {
+    expect(matchOption('Saterday', days)).toBe('Saturday');
+    expect(matchOption('Monday', days)).toBeNull();
+    expect(matchOption('s', days)).toBeNull();
+  });
+  it('reads multi-select answers', () => {
+    const checks = ['Eye check-up', 'Blood pressure, sugar', 'Dental'];
+    expect(matchOptions('dental and eye check-up', checks)).toEqual(['Eye check-up', 'Dental']);
+    expect(matchOptions('Eye check-up, Blood pressure, sugar', checks)).toEqual(['Eye check-up', 'Blood pressure, sugar']);
+    expect(matchOptions('पहला और तीसरा', checks)).toEqual(['Eye check-up', 'Dental']);
+    expect(matchOptions('all of them', checks)).toEqual(checks);
+    expect(matchOptions('सगळे', checks)).toEqual(checks);
+    expect(matchOptions('dental and haircut', checks)).toBeNull();
+  });
+  it('reads yes/no at the start of a sentence, in Marathi too', () => {
+    expect(leadingYesNo('Yes, I do')).toBe('Yes');
+    expect(leadingYesNo('हो')).toBe('Yes');
+    expect(leadingYesNo('नाही')).toBe('No');
+    expect(leadingYesNo('ji nahi')).toBe('No');
+    expect(leadingYesNo('maybe')).toBeNull();
   });
 });

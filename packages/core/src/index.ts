@@ -11,3 +11,5 @@ export * from './profile';
 export * from './prompts';
 export * from './commands';
 export * from './google';
+export * from './microsoft';
+export * from './pii';

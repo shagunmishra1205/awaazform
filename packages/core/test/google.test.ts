@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  createSession, extractGoogleFormData, googlePrefillUrl, parseGoogleForm, parseGoogleFormUrl, sessionReducer, type Session,
+  canonicalFormId, createSession, extractGoogleFormData, googleFormUrl, googlePrefillUrl, parseGoogleForm, parseGoogleFormUrl, sessionReducer, type Session,
 } from '../src';
 
 // Item shapes copied from real FB_PUBLIC_LOAD_DATA_ payloads (Nov 2026), with made-up content.
@@ -48,14 +48,29 @@ describe('parseGoogleFormUrl', () => {
   it('accepts responder and short links', () => {
     expect(parseGoogleFormUrl(`https://docs.google.com/forms/d/e/${FORM_ID}/viewform?usp=sharing`)).toEqual({ kind: 'form', formId: FORM_ID });
     expect(parseGoogleFormUrl(`https://docs.google.com/forms/u/0/d/e/${FORM_ID}/formResponse`)).toEqual({ kind: 'form', formId: FORM_ID });
+    expect(parseGoogleFormUrl(`https://docs.google.com/forms/d/e/${FORM_ID}`)).toEqual({ kind: 'form', formId: FORM_ID });
     expect(parseGoogleFormUrl(' https://forms.gle/AbC123xyz ')).toEqual({ kind: 'short', url: 'https://forms.gle/AbC123xyz' });
   });
-  it('flags editor links and rejects everything else', () => {
-    expect(parseGoogleFormUrl('https://docs.google.com/forms/d/1abcdefghijklmnopqrstuvwxyz/edit')).toEqual({ kind: 'edit' });
-    for (const bad of ['http://docs.google.com/forms/d/e/x/viewform', 'https://evil.com/forms/d/e/1FAIpQLSd_aaaaaaaaaaaaaaa/viewform',
-      'https://docs.google.com.evil.com/forms/d/e/1FAIpQLSd_aaaaaaaaaaaaaaa/viewform', 'https://forms.gle/a/b', 'not a url', 'file:///etc/passwd']) {
+  it('accepts long links without a scheme, over http, or inside other text', () => {
+    expect(parseGoogleFormUrl(`docs.google.com/forms/d/e/${FORM_ID}/viewform`)).toEqual({ kind: 'form', formId: FORM_ID });
+    expect(parseGoogleFormUrl(`http://docs.google.com/forms/d/e/${FORM_ID}/viewform`)).toEqual({ kind: 'form', formId: FORM_ID });
+    expect(parseGoogleFormUrl(`Please fill: https://docs.google.com/forms/d/e/${FORM_ID}/viewform?usp=sf_link thanks`)).toEqual({ kind: 'form', formId: FORM_ID });
+    expect(parseGoogleFormUrl('forms.gle/AbC123xyz')).toEqual({ kind: 'short', url: 'https://forms.gle/AbC123xyz' });
+  });
+  it('treats document links as worth trying, and remembers editor links', () => {
+    expect(parseGoogleFormUrl('https://docs.google.com/forms/d/1abcdefghijklmnopqrstuvwxyz/viewform')).toEqual({ kind: 'doc', docId: '1abcdefghijklmnopqrstuvwxyz', edit: false });
+    expect(parseGoogleFormUrl('https://docs.google.com/forms/d/1abcdefghijklmnopqrstuvwxyz/edit')).toEqual({ kind: 'doc', docId: '1abcdefghijklmnopqrstuvwxyz', edit: true });
+  });
+  it('rejects everything else', () => {
+    for (const bad of ['https://evil.com/forms/d/e/1FAIpQLSd_aaaaaaaaaaaaaaa/viewform',
+      'https://docs.google.com.evil.com/forms/d/e/1FAIpQLSd_aaaaaaaaaaaaaaa/viewform', 'https://forms.gle/a/b', 'not a url', 'file:///etc/passwd',
+      'https://docs.google.com/document/d/1abcdefghijklmnopqrstuvwxyz/edit', 'https://docs.google.com:8443/forms/d/e/1FAIpQLSd_aaaaaaaaaaaaaaa/viewform']) {
       expect(parseGoogleFormUrl(bad), bad).toBeNull();
     }
+  });
+  it('builds responder URLs for published and document ids', () => {
+    expect(googleFormUrl(FORM_ID)).toBe(`https://docs.google.com/forms/d/e/${FORM_ID}/viewform`);
+    expect(googleFormUrl('d/1abcdefghijklmnopqrstuvwxyz')).toBe('https://docs.google.com/forms/d/1abcdefghijklmnopqrstuvwxyz/viewform');
   });
 });
 
@@ -145,5 +160,14 @@ describe('googlePrefillUrl', () => {
 
   it('returns null for sessions that are not Google Forms', () => {
     expect(googlePrefillUrl(createSession({ id: 's', formTitle: 'x', questions: [] }))).toBeNull();
+  });
+});
+
+describe('canonicalFormId', () => {
+  it('reads the published id a responder page reports', () => {
+    const data: unknown[] = Array(20).fill(null);
+    data[14] = `e/${FORM_ID}`;
+    expect(canonicalFormId(data)).toBe(FORM_ID);
+    expect(canonicalFormId([])).toBeNull();
   });
 });

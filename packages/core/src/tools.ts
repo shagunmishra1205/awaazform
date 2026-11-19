@@ -18,6 +18,7 @@ export const toolSchemas = {
   highlight_field: z.object({ questionId }),
   verify_field: z.object({ questionId }),
   build_report: z.object({}),
+  go_to_question: z.object({ questionId }),
 } satisfies Record<ToolName, z.ZodType>;
 
 export type ToolArgs<N extends ToolName> = z.infer<(typeof toolSchemas)[N]>;
@@ -34,6 +35,7 @@ const descriptions: Record<ToolName, string> = {
   highlight_field: 'Highlight a field in the form so the user can see it.',
   verify_field: 'Read a filled field back from the form and check it matches the confirmed answer.',
   build_report: 'Build the submission readiness report.',
+  go_to_question: 'Move to a question the user asked for, and present it. Does not fill anything.',
 };
 
 /** OpenAI-compatible tool declarations (Groq's chat API uses this format). */
@@ -59,5 +61,6 @@ export function describeCall(name: ToolName, args: Record<string, unknown>, labe
     case 'highlight_field': return `Highlighting ${q}`;
     case 'verify_field': return `Checking ${q} was filled correctly`;
     case 'build_report': return 'Building the readiness report';
+    case 'go_to_question': return `Moving to ${q}`;
   }
 }

@@ -12,6 +12,8 @@ export interface ToolHost {
   readBack(q: FormQuestion, value: string): Promise<void>;
   explain(q: FormQuestion): Promise<string>;
   highlight(q: FormQuestion): Promise<void>;
+  /** Moves to a question (navigation only; never writes). Optional so older hosts keep working. */
+  goTo?(q: FormQuestion): Promise<void>;
   /** Shows the saved value and asks “Use saved …?”. Resolves to the value only if the user says yes. */
   requestProfileUse(key: CanonicalKey): Promise<string | null>;
   /** Asks “Remember this for next time?”. Resolves true only if the user says yes. */
@@ -133,6 +135,13 @@ export class ToolRunner {
 
       case 'verify_field':
         return JSON.stringify({ ok: await this.ctl.verify(q!.id) });
+
+      case 'go_to_question': {
+        const i = s.questions.findIndex((x) => x.id === q!.id);
+        if (this.host.goTo) await this.host.goTo(q!);
+        else this.ctl.goto(i);
+        return JSON.stringify({ at: i + 1, label: q!.label });
+      }
 
       case 'build_report':
         return reportToMarkdown(buildReport(s));

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { FormQuestion } from '../types';
 import {
-  matchOption, normalizeDate, normalizeEmail, normalizeNumber,
+  leadingYesNo, matchOption, matchOptions, normalizeDate, normalizeEmail, normalizeNumber,
   normalizePhone, normalizeTime, normalizeYesNo,
 } from '../normalize';
 
@@ -59,8 +59,11 @@ export function validateAnswer(q: FormQuestion, raw: string): ValidationResult {
       return v ? { ok: true, normalized: v } : fail("I couldn't read that time. Try “10:30 am”");
     }
     case 'yesno': {
-      const v = normalizeYesNo(input);
-      return v ? { ok: true, normalized: v } : fail('Please answer yes or no');
+      const v = leadingYesNo(input) ?? (q.options?.length ? matchOption(input, q.options) : null);
+      if (!v) return fail('Please answer yes or no');
+      // Google's yes/no questions may label the options in another language or case; fill the form's own text.
+      const own = q.options?.find((o) => o.toLowerCase() === v.toLowerCase() || normalizeYesNo(o) === v);
+      return { ok: true, normalized: own ?? v };
     }
     case 'choice':
     case 'dropdown':
@@ -72,11 +75,9 @@ export function validateAnswer(q: FormQuestion, raw: string): ValidationResult {
     case 'multichoice':
     case 'checkbox': {
       const opts = q.options ?? [];
-      const parts = input.split(/\s*(?:,|;| and | और )\s*/).filter(Boolean);
-      const matched = parts.map((p) => matchOption(p, opts));
-      if (matched.some((m) => m === null)) return fail(`Please choose from: ${opts.join(', ')}`);
-      const unique = [...new Set(matched as string[])];
-      return { ok: true, normalized: unique.join(', ') };
+      const matched = matchOptions(input, opts);
+      if (!matched?.length) return fail(`Please choose from: ${opts.join(', ')}`);
+      return { ok: true, normalized: matched.join(', ') };
     }
   }
 }

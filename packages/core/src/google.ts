@@ -3,25 +3,47 @@
 import { classifySupport, type RawControl } from './safety';
 import type { FieldType, FormQuestion, Session } from './types';
 
-/** Public responder URLs: docs.google.com/forms/d/e/<id>/viewform, or a forms.gle short link. */
-export function parseGoogleFormUrl(input: string): { kind: 'form'; formId: string } | { kind: 'short'; url: string } | { kind: 'edit' } | null {
+export type GoogleFormLink =
+  | { kind: 'form'; formId: string }
+  | { kind: 'short'; url: string }
+  /** /forms/d/<id>/…: a document link. Public forms answer it too, so the server tries before giving up. */
+  | { kind: 'doc'; docId: string; edit: boolean };
+
+/**
+ * Finds a Google Form link in what the user pasted: the responder link (docs.google.com/forms/d/e/<id>/viewform),
+ * the document link (docs.google.com/forms/d/<id>/…), or a forms.gle short link. The scheme may be missing
+ * or http, and the link may sit inside other text (“Fill this: https://…”).
+ */
+export function parseGoogleFormUrl(input: string): GoogleFormLink | null {
+  const found = input.trim().match(/(?:https?:\/\/)?(?:forms\.gle|docs\.google\.com)\/[^\s<>"'`]+/i);
+  if (!found) return null;
   let u: URL;
   try {
-    u = new URL(input.trim());
+    u = new URL(/^https?:\/\//i.test(found[0]) ? found[0].replace(/^http:/i, 'https:') : `https://${found[0]}`);
   } catch {
     return null;
   }
-  if (u.protocol !== 'https:') return null;
-  if (u.hostname === 'forms.gle' && /^\/[\w-]+$/.test(u.pathname)) return { kind: 'short', url: `https://forms.gle${u.pathname}` };
-  if (u.hostname !== 'docs.google.com') return null;
-  const m = u.pathname.match(/^\/forms(?:\/u\/\d+)?\/d\/e\/([\w-]{20,})\//);
+  if (u.protocol !== 'https:' || u.username || u.password || u.port) return null;
+  const host = u.hostname.toLowerCase();
+  if (host === 'forms.gle') return /^\/[\w-]+\/?$/.test(u.pathname) ? { kind: 'short', url: `https://forms.gle${u.pathname.replace(/\/$/, '')}` } : null;
+  if (host !== 'docs.google.com') return null;
+  const m = u.pathname.match(/^\/forms(?:\/u\/\d+)?\/d\/e\/([\w-]{20,})(?:\/|$)/);
   if (m) return { kind: 'form', formId: m[1]! };
-  // The editor link (/forms/d/<id>/edit) is not public.
-  if (/^\/forms(?:\/u\/\d+)?\/d\/[\w-]{20,}/.test(u.pathname)) return { kind: 'edit' };
+  const d = u.pathname.match(/^\/forms(?:\/u\/\d+)?\/d\/([\w-]{20,})(?:\/([\w-]*))?/);
+  if (d) return { kind: 'doc', docId: d[1]!, edit: /^edit/.test(d[2] ?? '') };
   return null;
 }
 
-export const googleFormUrl = (formId: string) => `https://docs.google.com/forms/d/e/${formId}/viewform`;
+/** A responder URL. `formId` is a published id, or `d/<docId>` for a form only known by its document id. */
+export const googleFormUrl = (formId: string) =>
+  formId.startsWith('d/') ? `https://docs.google.com/forms/${formId}/viewform` : `https://docs.google.com/forms/d/e/${formId}/viewform`;
+
+/** The published form id a responder page reports about itself (`e/<id>` in FB_PUBLIC_LOAD_DATA_). */
+export function canonicalFormId(data: unknown[]): string | null {
+  const v = data[14];
+  const m = typeof v === 'string' ? v.match(/^e\/([\w-]{20,})$/) : null;
+  return m ? m[1]! : null;
+}
 
 /** Pulls the FB_PUBLIC_LOAD_DATA_ array out of a responder page's HTML. */
 export function extractGoogleFormData(html: string): unknown[] | null {
@@ -139,7 +161,7 @@ const isYesNo = (o: string[]) => o.length === 2 && /^(yes|हाँ|हां)$/
 const otherNote = (hasOther: boolean) => (hasOther ? { supportReason: 'Choose "Other" on the form itself if none of these fit' } : {});
 
 /** Splits a normalized multi-value answer ("A, B") back into options, even when options contain commas. */
-function splitOptions(value: string, options: string[]): string[] {
+export function splitOptions(value: string, options: string[]): string[] {
   const out: string[] = [];
   let rest = value;
   const byLength = [...options].sort((a, b) => b.length - a.length);

@@ -1,19 +1,47 @@
 // System prompt for /api/chat — PRD §8.5 rules and FR-45 scope.
-import type { FormQuestion, Language } from './types';
+import type { AnswerStatus, FormQuestion, Language } from './types';
+
+export const LANGUAGE_NAMES: Record<Language, string> = {
+  en: 'English',
+  hi: 'Hindi (Devanagari script)',
+  bn: 'Bengali (Bengali script)',
+  mr: 'Marathi (Devanagari script)',
+  te: 'Telugu (Telugu script)',
+  ta: 'Tamil (Tamil script)',
+  gu: 'Gujarati (Gujarati script)',
+  ur: 'Urdu (Perso-Arabic script)',
+  kn: 'Kannada (Kannada script)',
+  ml: 'Malayalam (Malayalam script)',
+  pa: 'Punjabi (Gurmukhi script)',
+  as: 'Assamese (Assamese script)',
+  ne: 'Nepali (Devanagari script)',
+};
 
 export function systemPrompt(opts: { formTitle: string; profileLabel: string; language: Language }): string {
-  const lang = opts.language === 'hi' ? 'Hindi (Devanagari script)' : 'English';
+  const lang = LANGUAGE_NAMES[opts.language] ?? 'English';
   return `You are AwaazForm, an assistant that helps one person complete one form by voice or text.
 
 Scope: the form “${opts.formTitle}”, filled for the profile “${opts.profileLabel}”, in this session only.
-Reply in ${lang}. Keep replies short (one or two sentences): they are read aloud.
+Reply in ${lang}. The user may mix languages (Hinglish, English words inside any Indian language); understand it.
+Keep replies short (one or two sentences): they are read aloud.
 
 How you act:
 - You can only act through the provided tools. You never write to the form yourself.
 - When the user gives an answer, call propose_fill with their answer. Do not change its meaning.
-  If the answer is in Hindi and the field expects English text, translate it and say so.
-- After propose_fill, tell the user the value and ask them to confirm. The app shows Confirm / Edit buttons;
-  you never confirm on the user's behalf, and you never say a field is filled until verify_field says so.
+- Dates: propose them as YYYY-MM-DD. Numbers and phone numbers: use the digits 0-9.
+- Write values the way the form expects them. For an English form, write names and places in English
+  letters (romanise “आयुष शुक्ला” as “Ayush Shukla”) and translate free text to English; say that you did.
+- Questions with options (choice, dropdown, checkbox, scale, yesno): the value MUST be the exact text of one
+  option, copied from the question's options. Map what the user said to it, in any language: “the second one”,
+  “दूसरा”, “পহিলা”, “option B”, a translation (“महिला” → “Female”), or a description (“I study in college” → “Student”).
+  For checkbox questions, join several options with “, ”. If nothing fits, or two options fit, ask which
+  one they mean and read the options; never pick for them.
+- One sentence may answer several questions (“I'm Ayush, my email is a@b.com”). Call propose_fill once for
+  each, using the question ids from the form outline. The app reads each one back for confirmation.
+- The user may correct an earlier answer (“actually my email is …”). Call propose_fill on that question again.
+- To move to a question the user names (“go to the email question”), call go_to_question.
+- After propose_fill, the app reads the value back and asks the user to confirm. You never confirm on the
+  user's behalf, and you never say a field is filled until verify_field says so.
 - Use lookup_profile only for name, email, phone, date of birth or address, and only propose a saved value
   after the user agrees.
 - Offer to remember an answer with offer_save only after it is confirmed, and only for those same details.
@@ -35,4 +63,27 @@ export function questionContext(q: FormQuestion | undefined, index: number, tota
     id: q.id, label: q.label, helpText: q.helpText, type: q.type,
     required: q.required, options: q.options, support: q.support,
   });
+}
+
+export interface OutlineItem {
+  id: string;
+  label: string;
+  type: FormQuestion['type'];
+  options?: string[];
+  /** Whether it has an answer yet. Answer values are never sent. */
+  done: boolean;
+  /** Not fillable by AwaazForm. */
+  manual?: boolean;
+}
+
+/** The form's questions, for multi-answer turns. Labels and options only: no answers (§8.5). */
+export function formOutline(questions: FormQuestion[], status: Record<string, AnswerStatus | undefined>): OutlineItem[] {
+  return questions.map((q) => ({
+    id: q.id,
+    label: q.label.slice(0, 160),
+    type: q.type,
+    ...(q.options?.length ? { options: q.options.slice(0, 40).map((o) => o.slice(0, 80)) } : {}),
+    done: ['confirmed', 'written', 'verified'].includes(status[q.id] ?? ''),
+    ...(q.support === 'unsupported' ? { manual: true } : {}),
+  }));
 }
