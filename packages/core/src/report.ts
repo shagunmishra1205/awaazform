@@ -35,8 +35,8 @@ export function buildReport(s: Session, now = new Date().toISOString()): Readine
       return;
     }
     if (a?.status === 'verified') {
-      r.completed.push({ ...item, value: a.normalized });
-      if (q.support !== 'supported') r.manualReview.push({ ...item, value: a.normalized, note: q.supportReason });
+      r.completed.push({ ...item, value: q.type === 'signature' ? '✍' : a.normalized });
+      if (q.support !== 'supported') r.manualReview.push({ ...item, value: q.type === 'signature' ? '✍' : a.normalized, note: q.supportReason });
       return;
     }
     if (a?.status === 'invalid' || (a?.status === 'confirmed' && a.error)) {
@@ -44,7 +44,7 @@ export function buildReport(s: Session, now = new Date().toISOString()): Readine
       return;
     }
     if (a?.status === 'written') {
-      r.manualReview.push({ ...item, value: a.normalized, note: 'Filled but not yet verified' });
+      r.manualReview.push({ ...item, value: q.type === 'signature' ? '✍' : a.normalized, note: 'Filled but not yet verified' });
       return;
     }
     if (q.required && a?.status !== 'skipped') {

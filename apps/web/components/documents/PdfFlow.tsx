@@ -8,7 +8,7 @@ import { PdfSurface } from '@/components/pdf/PdfSurface';
 import { SessionWorkspace } from '@/components/SessionWorkspace';
 import { db } from '@/lib/db';
 import {
-  aiCandidates, analyzePdf, flatPlan, heuristicCandidates, MAX_PDF_BYTES, PdfFiller, placeBoxes, splitCaptioned,
+  aiCandidates, analyzePdf, flatPlan, heuristicCandidates, MAX_PDF_BYTES, PdfFiller, placeBoxes, splitCaptioned, tableTicks, addSignatures,
   type Candidate, type PageSize, type PdfLayout, type PdfPlan, type TextItem,
 } from '@/lib/pdf';
 import { discardSession, loadSession, PDF_KEY } from '@/lib/session-store';
@@ -78,7 +78,7 @@ export function PdfFlow({ file, onPick }: { file?: File; onPick: (f: File) => vo
       via = 'heuristic';
       aiError = (err as Error).message;
     }
-    candidates = splitCaptioned(candidates, a.items, a.rules);
+    candidates = tableTicks(addSignatures(splitCaptioned(candidates, a.items, a.rules), a.items), a.items, a.rects);
     setStep({ s: 'review', bytes, fileName: a.fileName, title: a.title, pages: a.pages, items: a.items, candidates, boxes: placeBoxes(candidates, a.items, a.pages, a.rules, a.rects), via, aiError });
   };
 

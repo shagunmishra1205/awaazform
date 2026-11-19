@@ -7,7 +7,7 @@ import { fmt } from '@/lib/i18n';
 import { useSettings } from '@/lib/settings';
 import { boxStyle, PdfPages } from './PdfPages';
 
-const TYPES: FieldType[] = ['text', 'paragraph', 'number', 'date', 'phone', 'email', 'yesno', 'choice', 'multichoice'];
+const TYPES: FieldType[] = ['text', 'paragraph', 'number', 'date', 'phone', 'email', 'yesno', 'choice', 'multichoice', 'signature'];
 
 type Drag = { id: string; option?: string; mode: 'move' | 'resize'; startX: number; startY: number; orig: PdfBox; scale: number };
 

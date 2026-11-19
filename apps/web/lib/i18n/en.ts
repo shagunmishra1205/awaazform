@@ -473,6 +473,12 @@ export const en = {
     check_yourself: 'Check yourself',
     options: 'Options',
     is_this_right: 'Is this right?',
+    sign_prompt: 'Please sign in the box on screen, with your finger or mouse.',
+    sign_pad: 'Signature pad. Draw your signature here.',
+    sign_clear: 'Clear',
+    sign_use: 'Use this signature',
+    sign_or_type: 'Or type your name to use as a signature',
+    signature_drawn: 'Your signature',
     you_said: 'You said: “{raw}”',
     from_saved: 'From your saved details',
     confirm: 'Confirm',
@@ -637,6 +643,7 @@ export const en = {
     dropdown: 'List',
     scale: 'Scale',
     file: 'File',
+    signature: 'Signature',
   },
 
   keys: {
@@ -669,6 +676,7 @@ export const en = {
     k_multi: 'one or more options',
     k_scale: 'a number on the scale',
     k_file: 'a file to upload',
+    k_signature: 'your signature, drawn on screen',
   },
 
   /**

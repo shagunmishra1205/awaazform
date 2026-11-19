@@ -14,6 +14,7 @@ import { EASE, Wave } from '@/components/Motion';
 import { applyEvent, Timeline, type TimelineCard } from '@/components/Timeline';
 import { AiUnavailable, assistantTurn, explainQuestion, fallbackExplanation, type ChatMsg } from '@/lib/assistant';
 import { db, ensureDefaultProfile, saveValue } from '@/lib/db';
+import { SignaturePad } from '@/components/SignaturePad';
 import { fmt, LANGUAGE_META, localizeMessage, Rich, type Strings } from '@/lib/i18n';
 import { thinkingSound } from '@/lib/earcon';
 import { createListener, type Listener } from '@/lib/vad';
@@ -43,10 +44,21 @@ const optionsIntro = (t: Strings, opts: string[]) =>
   opts.length > 8 ? fmt(t.session.options_many, { n: opts.length }) : fmt(t.session.options_intro, { list: opts.map((o, i) => `${i + 1}, ${o}`).join('; ') });
 
 export function displayValue(q: FormQuestion, v: string, lang: Language): string {
+  // A drawn signature is an image (shown with <Answer>), never read out or printed as text.
+  if (q.type === 'signature') return '';
   if (q.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
     return new Date(`${v}T00:00:00`).toLocaleDateString(LANGUAGE_META[lang]?.locale ?? 'en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
   }
   return v;
+}
+
+/** An answer as shown on screen: a drawn signature as its picture, everything else as text. */
+function Answer({ q, v, lang, alt }: { q: FormQuestion; v: string; lang: Language; alt: string }) {
+  if (q.type === 'signature' && v.startsWith('data:image/png')) {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={v} alt={alt} className="inline-block max-h-16 max-w-full rounded bg-white p-1 align-middle" />;
+  }
+  return <>{displayValue(q, v, lang)}</>;
 }
 
 /** An answer as the user should hear it: option answers in their language, everything else as filled. */
@@ -265,6 +277,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
       return void say(parts.filter(Boolean).join(' '));
     }
     if (cq.options?.length && cq.type !== 'yesno') parts.push(optionsIntro(tt, tq?.options ?? cq.options), isMulti(cq) ? tt.session.multi_hint : '');
+    if (cq.type === 'signature' && a.status !== 'proposed') parts.push(tt.session.sign_prompt);
     if (cq.support === 'unsupported') {
       parts.push(tt.session.not_supported, localizeMessage(tt, cq.supportReason));
       // Live Mode never waits on a question AwaazForm can't fill (a file upload, say): it says so and moves on.
@@ -803,7 +816,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
                     <li key={x.id} className="flex items-center justify-between gap-3 rounded-[var(--r-12)] border border-line bg-surface p-3">
                       <span className="min-w-0">
                         <span className="block text-xs text-muted">{i + 1}. {qt[x.id]?.label ?? x.label}</span>
-                        <span className="block font-semibold break-words">{displayValue(x, a.normalized ?? '', lang)}</span>
+                        <span className="block font-semibold break-words"><Answer q={x} v={a.normalized ?? ''} lang={lang} alt={t.session.signature_drawn} /></span>
                       </span>
                       <button type="button" className="btn btn-ghost flex-none" onClick={() => { setReviewing(false); void present(i); }}>{t.common.edit}</button>
                     </li>
@@ -850,7 +863,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
                   className="grid gap-4 rounded-[var(--r-16)] border-2 p-5" style={{ borderColor: 'var(--violet-300)', background: 'var(--violet-100)' }}>
                   <div>
                     <p id="rb-h" className="text-sm font-medium" style={{ color: 'var(--accent-text)' }}>{t.session.is_this_right}</p>
-                    <p className="mt-1 text-2xl font-semibold break-words" aria-live="polite">{displayValue(q, answer.normalized, lang)}</p>
+                    <p className="mt-1 text-2xl font-semibold break-words" aria-live="polite"><Answer q={q} v={answer.normalized} lang={lang} alt={t.session.signature_drawn} /></p>
                     {answer.translated && <p className="mt-1 text-xs text-muted">You said: “{answer.raw}”</p>}
                     {answer.source === 'profile' && <p className="mt-1 text-xs text-muted">{t.session.from_saved}</p>}
                   </div>
@@ -861,7 +874,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
                 </motion.div>
               ) : answer.status === 'verified' ? (
                 <div className="flex items-center justify-between gap-3 rounded-[var(--r-16)] p-4" style={{ background: 'var(--green-100)', color: 'var(--green-600)' }}>
-                  <span className="font-semibold break-words">✓ {displayValue(q, answer.normalized ?? '', lang)}</span>
+                  <span className="font-semibold break-words">✓ <Answer q={q} v={answer.normalized ?? ''} lang={lang} alt={t.session.signature_drawn} /></span>
                   <button type="button" className="btn-quiet !text-current underline" onClick={() => ctl?.edit(q.id)}>{t.common.edit}</button>
                 </div>
               ) : answer.status === 'confirmed' && answer.error ? (
@@ -872,6 +885,8 @@ export function SessionWorkspace(props: WorkspaceProps) {
                     <button type="button" className="btn btn-ghost" onClick={() => ctl?.edit(q.id)}>{t.common.edit}</button>
                   </span>
                 </div>
+              ) : q.type === 'signature' ? (
+                <SignaturePad key={q.id} t={t} disabled={!!busy} onDone={(png) => void submit(png, 'typed')} />
               ) : (
                 <form className="grid gap-2" onSubmit={(e) => { e.preventDefault(); void submit(input, 'typed'); }}>
                   <label htmlFor="answer" className="sr-only">{t.session.your_answer}</label>

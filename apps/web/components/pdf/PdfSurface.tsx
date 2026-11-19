@@ -44,7 +44,7 @@ export function PdfSurface({ handleRef, bytes, plan, filler }: {
 
   const typeIn = (qid: string, text: string) => {
     stopTyping();
-    if (reduceRef.current) {
+    if (reduceRef.current || text.startsWith('data:')) { // a signature appears whole, not typed in
       setGhost((g) => ({ ...g, [qid]: text }));
       setVisual((v) => ({ ...v, [qid]: 'proposed' }));
       return;
@@ -142,7 +142,10 @@ export function PdfSurface({ handleRef, bytes, plan, filler }: {
                   fontSize: (segs[0]?.size ?? Math.min(11, b.box.h - 3)) * scale,
                   ...lineStyle,
                 }}>
-                {!b.optionBoxes && <span className="whitespace-nowrap">{inline[0]?.text ?? ''}</span>}
+                {q.type === 'signature' && value?.startsWith('data:image/png')
+                  // eslint-disable-next-line @next/next/no-img-element
+                  ? <img src={value} alt="" className="absolute bottom-0 left-1/2 max-h-full max-w-full -translate-x-1/2 object-contain" />
+                  : !b.optionBoxes && <span className="whitespace-nowrap">{inline[0]?.text ?? ''}</span>}
                 {vis === 'verified' && <span aria-label="verified" className="absolute -top-2 -right-2 grid h-4 w-4 place-items-center rounded-full text-[9px] text-white" style={{ background: 'var(--green-600)' }}>✓</span>}
               </div>
               {extra.map((seg, i) => (

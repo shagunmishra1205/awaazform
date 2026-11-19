@@ -180,7 +180,7 @@ function drawnShapes(ops: { fnArray: number[]; argsArray: unknown[][] }, OPS: Re
     const x = Math.min(...xs), y = Math.min(...ys), w = Math.max(...xs) - x, h = Math.max(...ys) - y;
     if (w >= 30 && h <= 2.5) rules.push({ page, x1: x, x2: x + w, y });
     else if (w <= 2.5 && h >= 6 && h <= 30) verticals.push({ x, y1: y, y2: y + h });
-    else if (w >= 24 && h >= 24 && w < 500) rects.push({ page, x, y, w, h });
+    else if (w >= 24 && h >= 8 && w < 500) rects.push({ page, x, y, w, h }); // frames and table cells
     else if (w >= 6 && w <= 28 && h >= 6 && h <= 28) rects.push({ page, x, y, w, h }); // a tick box or a character cell
   };
   for (let i = 0; i < ops.fnArray.length; i++) {
@@ -287,6 +287,8 @@ export interface Candidate {
   include: boolean;
   /** Set when the place to write is already known (one part of a captioned line). */
   box?: PdfBox;
+  /** Set when the tick boxes are already known (a table's tick columns). */
+  optionBoxes?: Record<string, PdfBox>;
 }
 
 const LABEL_HINT = /\b(name|surname|mobile|phone|e-?mail|date of birth|dob|gender|sex|address|house|building|street|locality|town|village|city|post office|pin ?code|postal|tehsil|taluk|district|state|country|father|mother|husband|wife|guardian|relative|relationship|place|date|age|occupation|qualification|nationality|aadha+r|epic|percentage)\b/i;
@@ -394,6 +396,76 @@ export function splitCaptioned(cands: Candidate[], items: TextItem[], rules: Rul
   return out.filter((c) => !captionIds.has(c.itemId) || c.box);
 }
 
+export const SIGNATURE = /signature|thumb impression|हस्ताक्षर|स्वाक्षरी/i;
+/** Someone else's signature (an officer, a parent): not the user's to draw. */
+const OTHERS_SIGNATURE = /officer|authori[sz]ed|principal|\bhod\b|head of|director|registrar|\b(ero|aero|blo)\b|verif|parent|guardian|witness|seal|stamp|office/i;
+
+function bounds(bs: PdfBox[]): PdfBox {
+  const x = Math.min(...bs.map((b) => b.x)), y = Math.min(...bs.map((b) => b.y));
+  return { x, y, w: Math.max(...bs.map((b) => b.x + b.w)) - x, h: Math.max(...bs.map((b) => b.y + b.h)) - y };
+}
+
+/** Where to sign: on the line printed above the label if there is one, else the clear space above it. */
+function signatureBox(it: TextItem, items: TextItem[], rules: Rule[], pw: number): PdfBox {
+  const w = Math.min(200, Math.max(140, it.w + 30));
+  const cx = it.x + it.w / 2;
+  const x = Math.max(24, Math.min(pw - 24 - w, cx - w / 2));
+  const line = rules.find((r) => r.page === it.page && r.y > it.y && r.y <= it.y + it.h + 14 && r.x1 < cx && r.x2 > cx);
+  const bottom = line ? line.y + 1 : it.y + it.h + 2;
+  // Stop below whatever is printed above (the declaration).
+  const above = items.filter((o) => o.page === it.page && o.id !== it.id && o.y > bottom && o.x < x + w && o.x + o.w > x).map((o) => o.y);
+  const top = Math.min(bottom + 50, above.length ? Math.min(...above) - 3 : Infinity);
+  return { x, y: bottom, w, h: Math.max(22, top - bottom) };
+}
+
+/** The user's own signature lines that the AI skipped (it is told signatures are filled by hand). */
+export function addSignatures(cands: Candidate[], items: TextItem[]): Candidate[] {
+  const have = new Set(cands.map((c) => c.itemId));
+  const extra = items
+    .filter((o) => SIGNATURE.test(o.text) && !OTHERS_SIGNATURE.test(o.text) && o.text.length <= 60 && !have.has(o.id))
+    .map((o) => ({ itemId: o.id, label: cleanLabel(o.text), type: 'text' as FieldType, required: false, include: true }));
+  return [...cands.filter((c) => !(SIGNATURE.test(c.label) && OTHERS_SIGNATURE.test(c.label))), ...extra];
+}
+
+/**
+ * A choice whose options are rows of a table with empty tick columns (“tick Internal / External”):
+ * the ticks go in those columns, so each row × column becomes an option, “Embedded Systems (Internal)”.
+ */
+export function tableTicks(cands: Candidate[], items: TextItem[], rects: Rect[]): Candidate[] {
+  const byId = new Map(items.map((i) => [i.id, i]));
+  return cands.map((cand) => {
+    if (!cand.options?.length) return cand;
+    const it = byId.get(cand.itemId);
+    if (!it) return cand;
+    const cells = dedupe(rects.filter((r) => r.page === it.page && r.w >= 24 && r.h >= 8 && r.h < 90));
+    const inside = (r: Rect, o: TextItem) => o.x + 1 >= r.x && o.x + 1 <= r.x + r.w && o.y + o.h / 3 >= r.y && o.y + o.h / 3 <= r.y + r.h;
+    const options: { text: string }[] = [];
+    const optionBoxes: Record<string, PdfBox> = {};
+    const seenRows = new Set<number>();
+    for (const op of cand.options) {
+      const oi = op.itemId ? byId.get(op.itemId) : undefined;
+      if (!oi) continue;
+      const cell = cells.find((r) => inside(r, oi));
+      if (!cell || seenRows.has(Math.round(cell.y))) continue;
+      const row = cells.filter((r) => Math.abs(r.y - cell.y) <= 1.5 && Math.abs(r.h - cell.h) <= 2 && r.x > cell.x + 1).sort((a, b) => a.x - b.x);
+      for (const c of row) {
+        if (items.some((o) => o.page === it.page && inside(c, o))) continue; // not empty: printed content
+        // The column's heading: the nearest text above, inside the column.
+        const head = items
+          .filter((o) => o.page === it.page && o.y > c.y + c.h && o.y < c.y + c.h + 140 && o.x + o.w / 2 >= c.x && o.x + o.w / 2 <= c.x + c.w)
+          .sort((a, b) => a.y - b.y)[0];
+        if (!head) continue;
+        seenRows.add(Math.round(cell.y));
+        const text = `${op.text} (${cleanLabel(head.text)})`;
+        const s = Math.min(12, c.h - 3);
+        options.push({ text });
+        optionBoxes[text] = { x: c.x + (c.w - s) / 2, y: c.y + (c.h - s) / 2, w: s, h: s };
+      }
+    }
+    return options.length >= 2 ? { ...cand, type: 'multichoice' as FieldType, options, optionBoxes } : cand;
+  });
+}
+
 /** A row of character boxes (PRN, mobile number) to the right of a label, plus any rows stacked under it. */
 function cellRow(it: TextItem, start: number, rects: Rect[], nextLabelX: number): PdfBox[] | null {
   const mid = it.y + it.h / 3;
@@ -452,8 +524,17 @@ export function placeBoxes(c: Candidate[], items: TextItem[], pages: PageSize[],
   for (const cand of c) {
     const it = byId.get(cand.itemId.replace(/c\d+$/, ''));
     if (!it) continue;
-    // One part of a captioned line: its place is already known.
+    // One part of a captioned line, or a table's tick columns: the place is already known.
     if (cand.box) { boxes[cand.itemId] = { page: it.page, box: cand.box }; continue; }
+    if (cand.optionBoxes && Object.keys(cand.optionBoxes).length) {
+      boxes[cand.itemId] = { page: it.page, box: bounds(Object.values(cand.optionBoxes)), optionBoxes: cand.optionBoxes };
+      continue;
+    }
+    // A signature: the space above “Signature of the student”, where people sign.
+    if (cand.type === 'signature' || SIGNATURE.test(cand.label) || SIGNATURE.test(it.text)) {
+      boxes[cand.itemId] = { page: it.page, box: signatureBox(it, items, rules, pages[it.page]?.width ?? 612) };
+      continue;
+    }
     const pw = pages[it.page]?.width ?? 612;
     const pageRules = rules.filter((r) => r.page === it.page);
     const sameLine = items.filter((o) => o.page === it.page && Math.abs(o.y - it.y) <= 3 && o.x > it.x + it.w - 1);
@@ -500,7 +581,9 @@ export function placeBoxes(c: Candidate[], items: TextItem[], pages: PageSize[],
         .sort((a, b) => a.x - b.x)[0];
       const cell = rects.find((r) => r.page === it.page && r.h < 40 && start >= r.x && start < r.x + r.w && it.y >= r.y - 2 && it.y <= r.y + r.h);
       const end = Math.min(nextLabel ? nextLabel.x : pw - 36, frame ? frame.x : Infinity, cell ? cell.x + cell.w : Infinity, pw - 36) - 6;
-      if (end - start >= 50) box = { x: start, y: it.y - 4, w: end - start, h };
+      // A date needs ~10 characters, not the whole row (“Date: ……… Signature”).
+      const cap = cand.type === 'date' ? start + 150 : Infinity;
+      if (end - start >= 50) box = { x: start, y: it.y - 4, w: Math.min(end, cap) - start, h };
     }
     // 3. No room on the line: underneath.
     box ??= { x: it.x, y: it.y - h - 4, w: Math.min(260, pw - it.x - 36), h };
@@ -533,6 +616,8 @@ export function placeBoxes(c: Candidate[], items: TextItem[], pages: PageSize[],
         optionBoxes[op.text] = tick ?? { x: oi.x - 16, y: oi.y - 2, w: 12, h: 12 };
       }
     }
+    // A choice question is outlined around its tick boxes, not over the instructions printed beside it.
+    if (optionBoxes && Object.keys(optionBoxes).length) box = bounds(Object.values(optionBoxes));
     boxes[cand.itemId] = { page: it.page, box, more: more.length ? more : undefined, optionBoxes };
   }
   return boxes;
@@ -546,11 +631,13 @@ export function flatPlan(fileName: string, title: string, pages: PageSize[], can
     const b = boxes[c.itemId]!;
     const id = `q${i + 1}`;
     const raw = (c.box ? '' : byId.get(c.itemId)?.text) || c.label;
-    const control = /signature|thumb impression/i.test(c.label) ? 'signature' : /photo/i.test(c.label) ? 'file' : c.type;
+    const signature = c.type === 'signature' || SIGNATURE.test(c.label);
+    const control = signature ? 'text' : /photo/i.test(c.label) ? 'file' : c.type;
+    // Signatures are drawn on screen and stamped into the PDF; the user still signs, AwaazForm only places it.
     const { support, reason } = classifySupport(c.label, control);
-    const options = c.options?.map((o) => o.text);
+    const options = signature ? undefined : c.options?.map((o) => o.text);
     questions.push({
-      id, label: c.label, type: options?.length && c.type === 'text' ? 'choice' : c.type, options, required: c.required, support, supportReason: reason,
+      id, label: c.label, type: signature ? 'signature' : options?.length && c.type === 'text' ? 'choice' : c.type, options, required: c.required, support, supportReason: reason,
       source: { kind: 'pdf-flat', fileName, page: b.page, box: b.box, more: b.more, cells: b.cells, optionBoxes: b.optionBoxes, uppercase: /block letters|capital letters/i.test(raw + ' ' + c.label) },
     });
     layout.boxes[id] = b;
@@ -610,7 +697,7 @@ export class PdfFiller implements FieldWriter {
     if (q.support === 'unsupported') throw new Error('This field is not filled by AwaazForm');
     const v = this.toPdfValue(q, value);
     if (q.source.kind === 'pdf-flat') {
-      if (!q.source.optionBoxes || !q.options?.length) this.assertEncodable(v);
+      if (q.type !== 'signature' && (!q.source.optionBoxes || !q.options?.length)) this.assertEncodable(v);
       if (q.source.cells?.length) {
         const n = q.source.cells.length;
         if (cellChars(q, v, n).length > n) throw new Error(`This field allows at most ${n} characters`);
@@ -657,7 +744,7 @@ export class PdfFiller implements FieldWriter {
   /** How a flat-PDF answer is laid out: the same lines the download draws, for the preview. */
   segments(q: FormQuestion, text?: string): Segment[] {
     const v = text ?? this.flatValues.get(q.id);
-    if (v === undefined || q.source.kind !== 'pdf-flat') return [];
+    if (v === undefined || q.source.kind !== 'pdf-flat' || q.type === 'signature') return [];
     if (q.source.cells?.length) return cellText(this.font, q.source.cells, cellChars(q, v, q.source.cells.length));
     return layoutText(this.font, [q.source.box, ...(q.source.more ?? [])], v);
   }
@@ -675,6 +762,15 @@ export class PdfFiller implements FieldWriter {
       const page = pages[q.source.page];
       if (!page) continue;
       const color = rgb(0.05, 0.1, 0.45);
+      if (q.type === 'signature') {
+        // The drawn signature, scaled to fit the box and sitting on its line.
+        const img = await this.doc.embedPng(v);
+        const b = q.source.box;
+        const k = Math.min(b.w / img.width, b.h / img.height);
+        const w = img.width * k, h = img.height * k;
+        page.drawImage(img, { x: b.x + (b.w - w) / 2, y: b.y, width: w, height: h });
+        continue;
+      }
       if (q.source.optionBoxes && q.options?.length) {
         // Tick the printed box for each chosen option.
         for (const choice of v.split(', ')) {

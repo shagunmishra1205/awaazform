@@ -65,7 +65,7 @@ export function suggestCanonicalKey(q: Pick<FormQuestion, 'label' | 'type'>): Ca
   const l = raw.toLowerCase().replace(/[*:：]+\s*$/u, '').trim();
   if (isSensitive(raw) || l.length > 70 || SOMEONE_ELSE.test(l)) return null;
   // Long free-text questions and choices are never a saved detail (a state or country list is, below).
-  if (q.type === 'paragraph' || q.type === 'checkbox' || q.type === 'multichoice' || q.type === 'yesno' || q.type === 'scale' || q.type === 'file') return null;
+  if (q.type === 'paragraph' || q.type === 'checkbox' || q.type === 'multichoice' || q.type === 'yesno' || q.type === 'scale' || q.type === 'file' || q.type === 'signature') return null;
   const own = /^(your|my|applicant'?s?|candidate'?s?|student'?s?|participant'?s?|employee'?s?|customer'?s?|patient'?s?|आपका|आपकी|अपना)\s+/i;
   const core = l.replace(own, '').replace(/\s*\((.*?)\)\s*/g, ' ').trim();
   const choiceOk = q.type === 'choice' || q.type === 'dropdown';

@@ -99,6 +99,7 @@ export class ToolRunner {
         const value = String(args.value);
         // Files are only ever chosen by the user, with the file picker. The model can't attach one.
         if (q!.type === 'file') throw new Error('The user chooses files themselves with the Choose a file button.');
+        if (q!.type === 'signature') throw new Error('Only the user can sign: they draw their signature on screen.');
         if (source === 'profile') {
           const key = this.approvedProfileValues.get(value);
           if (!key) throw new Error('Profile values can only be proposed after the user agrees via lookup_profile.');

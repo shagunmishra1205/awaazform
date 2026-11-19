@@ -77,6 +77,8 @@ export function validateAnswer(q: FormQuestion, raw: string): ValidationResult {
       const name = input.replace(/[\\/]/g, '').slice(0, 255);
       return name ? { ok: true, normalized: name } : fail('Please choose a file');
     }
+    case 'signature':
+      return /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(input) && input.length < 1_500_000 ? { ok: true, normalized: input } : fail('Please draw your signature in the box');
     case 'multichoice':
     case 'checkbox': {
       const opts = q.options ?? [];
