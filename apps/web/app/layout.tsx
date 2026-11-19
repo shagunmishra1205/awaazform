@@ -4,6 +4,7 @@ import {
   Noto_Sans_Kannada, Noto_Sans_Malayalam, Noto_Sans_Tamil, Noto_Sans_Telugu,
 } from 'next/font/google';
 import { Nav } from '@/components/Nav';
+import { PwaProvider } from '@/components/PwaProvider';
 import { SettingsProvider, settingsBootScript } from '@/lib/settings';
 import './globals.css';
 
@@ -22,11 +23,15 @@ const urdu = Noto_Nastaliq_Urdu({ subsets: ['arabic'], variable: '--font-urdu', 
 const fonts = [inter, devanagari, fira, bengali, gujarati, gurmukhi, tamil, telugu, kannada, malayalam, urdu].map((f) => f.variable).join(' ');
 
 export const metadata: Metadata = {
+  applicationName: 'AwaazForm',
+  appleWebApp: { capable: true, title: 'AwaazForm', statusBarStyle: 'default' },
+  icons: { apple: '/icons/apple-touch-icon.png' },
+  formatDetection: { telephone: false },
   title: 'AwaazForm — Your voice. Your form. Your access.',
   description: 'Fill Google Forms, Microsoft Forms, PDFs and Word files by voice in English and 12 Indian languages. Every answer is read back and filled only after you confirm.',
 };
 
-export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', themeColor: '#ffffff' };
+export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', themeColor: '#624de3' };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -36,10 +41,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <SettingsProvider>
+          <PwaProvider>
           <Nav />
           <main id="main" tabIndex={-1} className="outline-none">
             {children}
           </main>
+          </PwaProvider>
         </SettingsProvider>
       </body>
     </html>

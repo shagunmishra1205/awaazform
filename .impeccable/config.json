@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "gradient-text",
+        "value": "*",
+        "files": [
+          "apps/web/app/globals.css"
+        ],
+        "createdAt": "2026-11-19T16:01:51.206Z",
+        "reason": "Codex review: existing .gradient-text predates this PWA change; CLAUDE.md explicitly says to preserve the Specify-derived theme and its gradient text token. No new gradient text introduced."
+      }
+    ]
+  }
+}

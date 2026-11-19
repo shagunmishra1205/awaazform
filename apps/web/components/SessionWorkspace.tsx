@@ -38,6 +38,8 @@ const isMulti = (q: FormQuestion) => q.type === 'checkbox' || q.type === 'multic
 /** Options to show and read out; yes/no questions without their own options get Yes / No. */
 const optionsOf = (q: FormQuestion) => (q.options?.length ? q.options : q.type === 'yesno' ? ['Yes', 'No'] : []);
 
+import { useWakeLock } from '@/lib/use-wake-lock';
+
 const LIVE_CONSENT = 'awaazform.liveConsent';
 const keyLabel = (t: Strings, k: CanonicalKey) => t.keys[k] ?? k.replace(/_/g, ' ');
 const optionsIntro = (t: Strings, opts: string[]) =>
@@ -106,6 +108,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
   const [aiOn, setAiOn] = useState(true);
   const [readAloud, setReadAloud] = useState(true);
   const [live, setLive] = useState<LiveState>('off');
+  useWakeLock(recording || live !== 'off');
   const [level, setLevel] = useState(0);
   const [liveDialog, setLiveDialog] = useState(false);
   const [unlockDialog, setUnlockDialog] = useState(false);
@@ -186,6 +189,8 @@ export function SessionWorkspace(props: WorkspaceProps) {
     };
     const ctl = new SessionController(initial, writer);
     ctlRef.current = ctl;
+    // Preserve the prepared session even if the app closes before the first answer.
+    void saveSession(initial, storageKey);
 
     const host: ToolHost = {
       ask: async (_q, text) => void (await say(text, true)),

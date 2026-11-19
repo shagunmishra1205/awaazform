@@ -29,6 +29,8 @@
 
 ## The Confidence Loop
 
+**Install on Android:** open AwaazForm in Chrome or Edge and tap **Install app** in the bottom invitation (also available in Settings). Includes offline access to saved work, launcher shortcuts and sharing forms/documents into the app. Voice and AI still need internet. See [PWA support and testing](apps/web/PWA.md).
+
 Bolu **listens**, **writes down** what you said, **checks** it, and **reads it back**. Nothing touches the form until you confirm, and then Bolu verifies that the value really landed.
 
 <p align="center">

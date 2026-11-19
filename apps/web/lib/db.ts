@@ -81,6 +81,12 @@ export async function forgetProfileValues(profileId: string) {
 
 /** FR-35: forget everything, all profiles. */
 export async function forgetAll() {
+  // Pending Android shares are encrypted separately by the service worker.
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.deleteDatabase('awaazform-share');
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
   await db.profiles.clear();
   await db.files.clear();
   await db.meta.clear(); // a new device key is made next time, so anything left over can't be read

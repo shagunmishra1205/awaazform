@@ -124,12 +124,45 @@ html { font-size: var(--base-size); scroll-behavior: smooth; scroll-padding-top:
 :root[data-motion="reduce"] { scroll-behavior: auto; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 body {
+  padding-bottom: var(--pwa-bottom, env(safe-area-inset-bottom, 0px));
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   font-feature-settings: "cv11", "ss01";
+}
+
+/* A bottom invitation that reserves its measured height, including large text and safe areas. */
+.pwa-notice {
+  position: fixed;
+  z-index: 40;
+  inset-inline: max(12px, env(safe-area-inset-left), env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  margin-inline: auto;
+  max-width: 720px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-16);
+  box-shadow: var(--shadow-lg);
+}
+.pwa-notice-icon { flex: none; border-radius: var(--r-12); }
+.pwa-notice-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+@media (max-width: 520px) {
+  :root[data-text="large"] .nav-row { height: auto; min-height: 64px; flex-wrap: wrap; padding-block: 12px; }
+  .pwa-notice { flex-wrap: wrap; gap: 12px; }
+  .pwa-notice-actions { width: 100%; justify-content: flex-end; }
+  .pwa-notice-actions > .btn { flex: 1; }
+}
+@media (display-mode: standalone) {
+  body > * { -webkit-tap-highlight-color: transparent; }
+  html { scroll-padding-top: calc(88px + env(safe-area-inset-top)); }
+  header.sticky { padding-top: env(safe-area-inset-top); }
 }
 h1, h2, h3, h4 { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.02em; line-height: 1.12; }
 

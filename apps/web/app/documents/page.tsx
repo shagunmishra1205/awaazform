@@ -7,6 +7,7 @@ import { PdfFlow } from '@/components/documents/PdfFlow';
 import { db } from '@/lib/db';
 import { DOCX_KEY, PDF_KEY } from '@/lib/session-store';
 import { useSettings } from '@/lib/settings';
+import { getFile } from '@/lib/secure-store';
 
 type Kind = 'pdf' | 'docx';
 type State = { kind: Kind | null; file?: File; error?: string; n: number };
@@ -24,6 +25,16 @@ export default function DocumentsPage() {
   // Resume the document worked on most recently, if its session is still stored.
   useEffect(() => {
     (async () => {
+      const shared = new URLSearchParams(location.search).get('shared');
+      if (shared) {
+        const stored = await getFile(`shared-${shared}`);
+        window.history.replaceState(null, '', '/documents');
+        if (!stored) { setState({ kind: null, n: 0, error: t.pwa.share_unavailable }); return; }
+        const file = new File([stored.bytes], stored.name, { type: (stored.plan as { type?: string })?.type || '' });
+        await db.files.delete(`shared-${shared}`);
+        pick(file);
+        return;
+      }
       const [pdf, docx] = await Promise.all([db.files.get('current-pdf'), db.files.get('current-docx')]);
       const has = (k: string) => !!localStorage.getItem(k);
       const candidates = [

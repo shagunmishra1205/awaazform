@@ -42,6 +42,8 @@ export default function FormPage() {
 
   // FR-22: resume a stored session; a ?url= link starts a new one.
   useEffect(() => {
+    const shared = new URLSearchParams(window.location.search).get('shared');
+    if (shared) return setStep({ s: 'paste', url: shared });
     const url = new URLSearchParams(window.location.search).get('url');
     if (url) return void scan(url);
     void loadSession(GFORM_KEY).then((saved) => {

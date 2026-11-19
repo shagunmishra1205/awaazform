@@ -3,6 +3,7 @@
 import { LANGUAGES, type Language } from '@awaazform/core';
 import { useEffect, useState } from 'react';
 import { Reveal } from '@/components/Motion';
+import { PwaSettings } from '@/components/PwaProvider';
 import { fmt, LANGUAGE_META } from '@/lib/i18n';
 import { useSettings, type Settings } from '@/lib/settings';
 import { speak } from '@/lib/voice';
@@ -31,6 +32,7 @@ export default function SettingsPage() {
       <p className="mt-2 text-muted">{S.lead}</p>
 
       <div className="mt-8 grid gap-6">
+        <PwaSettings />
         <fieldset className="card grid gap-3 p-6">
           <legend className="px-1 text-lg font-semibold">{S.language}</legend>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">

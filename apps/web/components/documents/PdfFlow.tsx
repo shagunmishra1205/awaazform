@@ -3,6 +3,7 @@
 import { createSession, type Session } from '@awaazform/core';
 import { useEffect, useRef, useState } from 'react';
 import { DocumentUpload } from '@/components/documents/DocumentUpload';
+import { ShareDocument } from '@/components/documents/ShareDocument';
 import { BoxEditor } from '@/components/pdf/BoxEditor';
 import { PdfSurface } from '@/components/pdf/PdfSurface';
 import { SessionWorkspace } from '@/components/SessionWorkspace';
@@ -100,7 +101,9 @@ export function PdfFlow({ file, onPick }: { file?: File; onPick: (f: File) => vo
         surfaceLabel={D.surface}
         surfaceRef={surfaceRef}
         surface={<PdfSurface handleRef={surfaceRef} bytes={step.bytes} plan={step.plan} filler={step.filler} />}
-        actions={<button type="button" className="btn" onClick={download}>{D.download}</button>}
+        actions={() => <><button type="button" className="btn" onClick={download}>{D.download}</button>
+          <ShareDocument makeFile={async () => new File([await step.filler.export() as BlobPart], step.plan.fileName.replace(/\.pdf$/i, '') + '-filled.pdf', { type: 'application/pdf' })} />
+        </>}
         intro={step.plan.kind === 'flat' ? (
           <p className="rounded-[var(--r-12)] px-3 py-2 text-sm" style={{ background: 'var(--amber-100)', color: 'var(--amber-700)' }}>
             {D.printed_note}

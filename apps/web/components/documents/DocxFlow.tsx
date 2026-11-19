@@ -3,6 +3,7 @@
 import { createSession, type FieldType, type FormQuestion, type Session } from '@awaazform/core';
 import { useEffect, useRef, useState } from 'react';
 import { DocumentUpload } from '@/components/documents/DocumentUpload';
+import { ShareDocument } from '@/components/documents/ShareDocument';
 import { DocxSurface } from '@/components/docx/DocxSurface';
 import { SessionWorkspace } from '@/components/SessionWorkspace';
 import { db } from '@/lib/db';
@@ -102,7 +103,9 @@ export function DocxFlow({ file, onPick }: { file?: File; onPick: (f: File) => v
         surfaceLabel={W.surface}
         surfaceRef={surfaceRef}
         surface={<DocxSurface handleRef={surfaceRef} doc={step.doc} questions={step.questions} />}
-        actions={<button type="button" className="btn" onClick={download}>{W.download}</button>}
+        actions={() => <><button type="button" className="btn" onClick={download}>{W.download}</button>
+          <ShareDocument makeFile={() => new File([step.doc.export() as BlobPart], step.doc.plan.fileName.replace(/\.docx$/i, '') + '-filled.docx', { type: DOCX_MIME })} />
+        </>}
         intro={
           <p className="rounded-[var(--r-12)] px-3 py-2 text-sm" style={{ background: 'var(--violet-100)', color: 'var(--accent-text)' }}>
             {W.intro}

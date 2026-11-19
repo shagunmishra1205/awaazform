@@ -78,7 +78,7 @@ export function Nav() {
         className="sticky top-0 z-50 border-b backdrop-blur-md transition-colors"
         style={{ background: 'color-mix(in srgb, var(--bg) 82%, transparent)', borderColor: scrolled || open ? 'var(--border)' : 'transparent' }}
       >
-        <div className="container-x flex h-16 items-center justify-between gap-3">
+        <div className="nav-row container-x flex h-16 items-center justify-between gap-3">
           <Link href="/" aria-label="AwaazForm"><Logo /></Link>
           <nav aria-label={t.nav.main} className="hidden xl:block">
             <ul className="flex gap-0.5 text-sm">
