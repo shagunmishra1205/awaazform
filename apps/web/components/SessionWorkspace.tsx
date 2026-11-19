@@ -20,7 +20,7 @@ import { saveSession } from '@/lib/session-store';
 import { useSettings } from '@/lib/settings';
 import type { SurfaceHandle } from '@/lib/surface';
 import { hasPasskey, isUnlocked, onVaultChange, readValues, unlock, unlockWithPasskey } from '@/lib/vault';
-import { isSpeaking, speak, sttHint, voiceAvailable, speakSentences, startRecording, stopSpeaking, transcribe, VoiceError, voiceInputSupported } from '@/lib/voice';
+import { isSpeaking, speak, sttHint, voiceAvailable, voicesReady, speakSentences, startRecording, stopSpeaking, transcribe, VoiceError, voiceInputSupported } from '@/lib/voice';
 
 type Offer =
   | { kind: 'use'; key: CanonicalKey; value: string; resolve?: (v: string | null) => void }
@@ -200,9 +200,11 @@ export function SessionWorkspace(props: WorkspaceProps) {
   // Say so once if this device can't read the chosen language aloud; everything is still on screen.
   useEffect(() => {
     if (!started || typeof speechSynthesis === 'undefined') return;
-    const check = () => { if (!voiceAvailable(lang)) setNotice(fmt(t.session.no_voice_lang, { language: LANGUAGE_META[lang].native })); };
-    const timer = setTimeout(check, 800); // voices load asynchronously
-    return () => clearTimeout(timer);
+    let live = true;
+    void voicesReady().then(() => {
+      if (live && !voiceAvailable(lang)) setNotice(fmt(t.session.no_voice_lang, { language: LANGUAGE_META[lang].native }));
+    });
+    return () => { live = false; };
   }, [started, lang, t]);
 
   const ctl = ctlRef.current;
@@ -265,7 +267,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
     if (!list.length) return void say(tt.session.nothing_to_fill, true);
     setReviewing(true);
     const c = ctlRef.current!;
-    const items = list.map((x) => `${x.label}: ${displayValue(x, c.session.answers[x.id]!.normalized ?? '', langNow)}`).join('. ');
+    const items = list.map((x) => `${x.label.replace(/[\s:：-]+$/u, '')}: ${displayValue(x, c.session.answers[x.id]!.normalized ?? '', langNow)}`).join('. ');
     await say(`${tt.session.review_intro} ${items}. ${fmt(tt.session.review_ask, commandWords(langNow))}`, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [say]);
@@ -284,7 +286,15 @@ export function SessionWorkspace(props: WorkspaceProps) {
     setBusy(null);
     setReviewing(false);
     const tt = latest.current.t;
-    await say(ok === list.length ? fmt(tt.session.filled_all, { n: ok }) : fmt(tt.session.filled_some, { n: ok, failed: list.length - ok }), true);
+    if (ok < list.length) return void say(fmt(tt.session.filled_some, { n: ok, failed: list.length - ok }), true);
+    // Questions still to answer: carry on with the conversation rather than wrapping up.
+    const qs = c.session.questions;
+    const next = qs.findIndex((x) => x.support !== 'unsupported' && !['verified', 'skipped', 'written', 'proposed'].includes(c.session.answers[x.id]?.status ?? ''));
+    if (next >= 0) {
+      await say(tt.session.filled_continue, true);
+      return void present(next);
+    }
+    await say(ok === 1 ? tt.session.filled_one : fmt(tt.session.filled_all, { n: ok }), true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [say]);
 

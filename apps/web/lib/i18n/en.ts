@@ -537,6 +537,8 @@ export const en = {
     fill_all: 'Fill all ({n})',
     review_now: 'Review answers ({n})',
     filled_all: 'Done. I filled {n} answers. Please check the form and press Submit yourself.',
+    filled_one: 'Done. I filled that answer. Please check the form and press Submit yourself.',
+    filled_continue: 'Done, those are on the form. Let’s carry on.',
     filled_some: 'I filled {n} answers. {failed} didn’t take; they’re marked on the form.',
     nothing_to_fill: 'There’s nothing to fill yet. Tell me your answers first.',
   },

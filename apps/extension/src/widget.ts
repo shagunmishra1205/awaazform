@@ -451,7 +451,7 @@ async function startReview() {
   reviewing = true;
   setBolu('idle');
   render();
-  const items = list.map((x) => `${x.label}: ${s.answers[x.id]!.normalized}`).join('. ');
+  const items = list.map((x) => `${x.label.replace(/[\s:：-]+$/u, '')}: ${s.answers[x.id]!.normalized}`).join('. ');
   await say(`${t.session.review_intro} ${items}. ${fmt(t.session.review_ask, commandWords(lang))}`);
 }
 
@@ -472,7 +472,14 @@ async function fillAll() {
   setBolu('happy');
   note = { text: t.widget.filled, tone: 'ok' };
   render();
-  await say(ok === list.length ? fmt(t.session.filled_all, { n: ok }) : fmt(t.session.filled_some, { n: ok, failed: list.length - ok }));
+  if (ok < list.length) return void (await say(fmt(t.session.filled_some, { n: ok, failed: list.length - ok })));
+  // Questions still to answer: carry on talking rather than wrapping up.
+  const next = nextOpen(-1);
+  if (next >= 0) {
+    await say(t.session.filled_continue);
+    return present(next);
+  }
+  await say(ok === 1 ? t.session.filled_one : fmt(t.session.filled_all, { n: ok }));
 }
 
 async function readBack(q: FormQuestion) {

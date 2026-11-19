@@ -124,8 +124,11 @@ async function speakInner(text: string, opts: { language: Language; rate?: numbe
     }
   }
   if (typeof speechSynthesis === 'undefined') return;
+  // Browsers fill the voice list asynchronously; asking too early finds nothing and Live Mode went silent.
+  await voicesReady();
   const voice = pickVoice(opts.language, opts.voiceURI);
-  // No voice for this language: stay silent rather than read it with a wrong-language voice. The text is on screen.
+  // Still no voice for this language once the list has loaded: stay silent rather than read it with a
+  // wrong-language voice. The words are on screen, and the session shows a notice about installing one.
   if (!voice && opts.language !== 'en') return;
   await new Promise<void>((resolve) => {
     const u = new SpeechSynthesisUtterance(text);
@@ -137,8 +140,20 @@ async function speakInner(text: string, opts: { language: Language; rate?: numbe
   });
 }
 
-/** Devanagari languages without their own voice can borrow a Hindi one. */
-const BORROW: Partial<Record<Language, string>> = { mr: 'hi', ne: 'hi' };
+/** Resolves once the browser has listed its voices (or after 1.5 s, if it never says). */
+let voicesPromise: Promise<void> | null = null;
+export function voicesReady(): Promise<void> {
+  if (typeof speechSynthesis === 'undefined') return Promise.resolve();
+  if (speechSynthesis.getVoices().length) return Promise.resolve();
+  return (voicesPromise ??= new Promise<void>((resolve) => {
+    const done = () => { speechSynthesis.removeEventListener('voiceschanged', done); resolve(); };
+    speechSynthesis.addEventListener('voiceschanged', done);
+    setTimeout(done, 1500);
+  }).finally(() => { voicesPromise = null; }));
+}
+
+/** Languages without their own voice can borrow one that reads the same script. */
+const BORROW: Partial<Record<Language, string>> = { mr: 'hi', ne: 'hi', as: 'bn' };
 
 function pickVoice(lang: Language, voiceURI?: string): SpeechSynthesisVoice | undefined {
   const voices = speechSynthesis.getVoices();
@@ -175,5 +190,6 @@ export function sttHint(q: { label: string; type: string; options?: string[] } |
     date: 'A date, like 12 March 2001.',
     text: /name/i.test(q.label) ? 'A person’s name, like Ayush Shukla, Priya Patil, Sunita Devi.' : '',
   };
-  return [q.label, q.options?.length ? `Options: ${q.options.join(', ')}.` : '', shape[q.type] ?? '', 'Yes. No. Next. Repeat.'].filter(Boolean).join(' ');
+  // No trailing command words: Whisper can echo its prompt on near-silent audio.
+  return [q.label, q.options?.length ? `Options: ${q.options.join(', ')}.` : '', shape[q.type] ?? ''].filter(Boolean).join(' ');
 }
