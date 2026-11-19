@@ -121,6 +121,13 @@ export function PdfSurface({ handleRef, bytes, plan, filler }: {
           const isActive = active === q.id;
           const value = vis === 'typing' || vis === 'proposed' ? ghost[q.id] : shown[q.id];
           const chosen = (vis === 'written' || vis === 'verified') && b.optionBoxes ? (shown[q.id] ?? '').split(', ') : [];
+          // The same line breaks the download uses: long answers continue on the printed lines below.
+          const segs = !b.optionBoxes && value ? filler.segments(q, value) : [];
+          const lineStyle = {
+            color: vis === 'typing' || vis === 'proposed' ? 'var(--violet-600)' : '#0d1a73',
+            fontStyle: vis === 'typing' || vis === 'proposed' ? 'italic' : 'normal',
+            fontFamily: 'Helvetica, Arial, sans-serif',
+          } as const;
           return (
             <div key={q.id}>
               <div data-qid={q.id} title={q.label}
@@ -129,14 +136,18 @@ export function PdfSurface({ handleRef, bytes, plan, filler }: {
                   ...boxStyle(b.box, plan.layout.pages[page]!, scale),
                   background: isActive ? 'rgba(98,77,227,0.10)' : vis === 'failed' ? 'rgba(255,212,0,0.25)' : 'transparent',
                   boxShadow: isActive ? '0 0 0 2px var(--violet-500)' : vis === 'verified' ? '0 0 0 1px rgba(0,135,58,0.5)' : 'none',
-                  fontSize: Math.max(8, Math.min(13, b.box.h * scale * 0.62)),
-                  color: vis === 'typing' || vis === 'proposed' ? 'var(--violet-600)' : '#0d1a73',
-                  fontStyle: vis === 'typing' || vis === 'proposed' ? 'italic' : 'normal',
-                  fontFamily: 'Helvetica, Arial, sans-serif',
+                  fontSize: (segs[0]?.size ?? Math.min(11, b.box.h - 3)) * scale,
+                  ...lineStyle,
                 }}>
-                {!b.optionBoxes && <span className="truncate">{value}</span>}
+                {!b.optionBoxes && <span className="whitespace-nowrap">{segs[0]?.text ?? ''}</span>}
                 {vis === 'verified' && <span aria-label="verified" className="absolute -top-2 -right-2 grid h-4 w-4 place-items-center rounded-full text-[9px] text-white" style={{ background: 'var(--green-600)' }}>✓</span>}
               </div>
+              {segs.slice(1).map((seg, i) => (
+                <div key={i} aria-hidden className="absolute flex items-center overflow-hidden px-0.5"
+                  style={{ ...boxStyle(seg.box, plan.layout.pages[page]!, scale), fontSize: seg.size * scale, ...lineStyle }}>
+                  <span className="whitespace-nowrap">{seg.text}</span>
+                </div>
+              ))}
               {b.optionBoxes && Object.entries(b.optionBoxes).map(([opt, ob]) => (
                 <div key={opt} className="absolute grid place-items-center rounded-[2px] font-bold" aria-hidden
                   style={{ ...boxStyle(ob, plan.layout.pages[page]!, scale), color: '#0d1a73', fontSize: ob.h * scale * 0.9,

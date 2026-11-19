@@ -127,6 +127,11 @@ export function BoxEditor({ bytes, pages, candidates, boxes, onChange, onBoxes }
                   <span aria-hidden className="absolute -right-1.5 -bottom-1.5 h-3 w-3 cursor-se-resize rounded-sm border-2 border-white" style={{ background: color }}
                     onPointerDown={(e) => onPointerDown(e, c.itemId, undefined, 'resize', scale)} />
                 </div>
+                {/* Lines a long answer continues on: shown, not dragged (they follow the printed lines). */}
+                {b.more?.map((mb, i) => (
+                  <div key={`m${i}`} aria-hidden className="pointer-events-none absolute rounded-[3px]"
+                    style={{ ...boxStyle(mb, pages[page]!, scale), border: `1px dashed ${color}`, opacity: sel ? 0.9 : 0.45 }} />
+                ))}
                 {b.optionBoxes && Object.entries(b.optionBoxes).map(([opt, ob]) => (
                   <div key={opt} role="button" tabIndex={0} aria-label={fmt(D.tick_for, { option: opt, label: c.label })}
                     className="absolute cursor-move rounded-[2px] outline-none" onKeyDown={(e) => onKey(e, c.itemId, opt)}

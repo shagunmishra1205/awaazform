@@ -18,7 +18,8 @@ export type FormSource =
   | { kind: 'dom'; url: string; key: string; platform: 'google' | 'microsoft' | 'other' }
   | { kind: 'docx'; fileName: string; slot: string }
   | { kind: 'pdf-acroform'; fileName: string; fieldName: string }
-  | { kind: 'pdf-flat'; fileName: string; page: number; box: PdfBox; optionBoxes?: Record<string, PdfBox>; uppercase?: boolean }
+  /** `more`: blank lines below the box (e.g. an address's second and third lines) that long answers wrap onto. */
+  | { kind: 'pdf-flat'; fileName: string; page: number; box: PdfBox; more?: PdfBox[]; optionBoxes?: Record<string, PdfBox>; uppercase?: boolean }
   | { kind: 'fixture'; name: string };
 
 export type SupportStatus = 'supported' | 'limited' | 'manual' | 'unsupported';

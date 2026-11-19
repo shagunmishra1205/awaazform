@@ -78,7 +78,7 @@ export function PdfFlow({ file, onPick }: { file?: File; onPick: (f: File) => vo
       via = 'heuristic';
       aiError = (err as Error).message;
     }
-    setStep({ s: 'review', bytes, fileName: a.fileName, title: a.title, pages: a.pages, items: a.items, candidates, boxes: placeBoxes(candidates, a.items, a.pages), via, aiError });
+    setStep({ s: 'review', bytes, fileName: a.fileName, title: a.title, pages: a.pages, items: a.items, candidates, boxes: placeBoxes(candidates, a.items, a.pages, a.rules, a.rects), via, aiError });
   };
 
   if (step.s === 'fill') {
