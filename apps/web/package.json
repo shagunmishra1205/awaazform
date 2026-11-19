@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test": "echo \"web: no unit tests yet\"",
     "test:e2e": "node e2e/session.e2e.mjs && node e2e/options.e2e.mjs && node e2e/pdf.e2e.mjs && node e2e/gform.e2e.mjs && node e2e/msform.e2e.mjs && node e2e/docx.e2e.mjs && node e2e/extension-content.e2e.mjs",
+    "test:signature": "node e2e/signature.e2e.mjs",
     "predev": "node scripts/copy-pdf-worker.mjs",
     "prebuild": "node scripts/copy-pdf-worker.mjs && node ../extension/build.mjs",
     "test:a11y": "node e2e/a11y.e2e.mjs",

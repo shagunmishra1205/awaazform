@@ -424,7 +424,9 @@ export function addSignatures(cands: Candidate[], items: TextItem[]): Candidate[
   const extra = items
     .filter((o) => SIGNATURE.test(o.text) && !OTHERS_SIGNATURE.test(o.text) && o.text.length <= 60 && !have.has(o.id))
     .map((o) => ({ itemId: o.id, label: cleanLabel(o.text), type: 'text' as FieldType, required: false, include: true }));
-  return [...cands.filter((c) => !(SIGNATURE.test(c.label) && OTHERS_SIGNATURE.test(c.label))), ...extra];
+  return [...cands.filter((c) => !(SIGNATURE.test(c.label) && OTHERS_SIGNATURE.test(c.label)))
+    .map((c) => SIGNATURE.test(c.label) ? { ...c, type: 'signature' as FieldType, include: true } : c),
+    ...extra.map((c) => ({ ...c, type: 'signature' as FieldType }))];
 }
 
 /**
@@ -587,10 +589,13 @@ export function placeBoxes(c: Candidate[], items: TextItem[], pages: PageSize[],
     }
     // 3. No room on the line: underneath.
     box ??= { x: it.x, y: it.y - h - 4, w: Math.min(260, pw - it.x - 36), h };
+    // Printed rules can also run across to another caption. Apply the date limit to every
+    // placement path, including a detected line or the fallback underneath the label.
+    if (cand.type === 'date') box.w = Math.min(box.w, 150, nextLabel ? Math.max(12, nextLabel.x - box.x - 6) : Infinity);
 
     // Blank answer lines straight below, with no label of their own: room for long answers.
     const more: PdfBox[] = [];
-    if (!cand.options?.length) {
+    if (!cand.options?.length && cand.type !== 'date') {
       let prevY = box.y;
       for (;;) {
         const next = pageRules
@@ -755,7 +760,11 @@ export class PdfFiller implements FieldWriter {
       this.doc.getForm().updateFieldAppearances(this.font);
       return this.doc.save();
     }
-    const pages = this.doc.getPages();
+    // A download is a snapshot. Drawing into the live document would leave old signatures,
+    // ticks and dates underneath corrected answers on every subsequent download.
+    const doc = await PDFDocument.load(this.bytes.slice(0));
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const pages = doc.getPages();
     for (const q of this.plan.questions) {
       const v = this.flatValues.get(q.id);
       if (v === undefined || q.source.kind !== 'pdf-flat') continue;
@@ -764,7 +773,7 @@ export class PdfFiller implements FieldWriter {
       const color = rgb(0.05, 0.1, 0.45);
       if (q.type === 'signature') {
         // The drawn signature, scaled to fit the box and sitting on its line.
-        const img = await this.doc.embedPng(v);
+        const img = await doc.embedPng(v);
         const b = q.source.box;
         const k = Math.min(b.w / img.width, b.h / img.height);
         const w = img.width * k, h = img.height * k;
@@ -775,7 +784,7 @@ export class PdfFiller implements FieldWriter {
         // Tick the printed box for each chosen option.
         for (const choice of v.split(', ')) {
           const b = q.source.optionBoxes[choice];
-          if (b) page.drawText('X', { x: b.x + 2, y: b.y + 2, size: Math.min(11, b.h), font: this.font, color });
+          if (b) page.drawText('X', { x: b.x + 2, y: b.y + 2, size: Math.min(11, b.h), font, color });
         }
         continue;
       }
@@ -785,10 +794,10 @@ export class PdfFiller implements FieldWriter {
         ? cellText(this.font, q.source.cells, cellChars(q, v, q.source.cells.length))
         : layoutText(this.font, [q.source.box, ...(q.source.more ?? [])], v);
       for (const seg of segs) {
-        page.drawText(seg.text, { x: seg.box.x + 2, y: seg.box.y + Math.max(2, (seg.box.h - seg.size) / 2 + 1), size: seg.size, font: this.font, color });
+        page.drawText(seg.text, { x: seg.box.x + 2, y: seg.box.y + Math.max(2, (seg.box.h - seg.size) / 2 + 1), size: seg.size, font, color });
       }
     }
-    return this.doc.save();
+    return doc.save();
   }
 }
 

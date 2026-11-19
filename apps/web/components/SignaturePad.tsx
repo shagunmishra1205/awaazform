@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type PointerEvent } from 'react';
+import { useLayoutEffect, useRef, useState, type PointerEvent } from 'react';
 import type { Strings } from '@/lib/i18n/core';
 
 const INK = '#0d1a73';
@@ -13,24 +13,33 @@ const INK = '#0d1a73';
 export function SignaturePad({ t, disabled, onDone }: { t: Strings; disabled?: boolean; onDone: (png: string) => void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const last = useRef<{ x: number; y: number; w: number } | null>(null);
+  const pointer = useRef<number | null>(null);
   const [inked, setInked] = useState(false);
   const [typed, setTyped] = useState('');
 
   // Match the canvas to its on-screen size at the device's pixel ratio, so lines are crisp.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const c = canvas.current;
     if (!c) return;
     const fit = () => {
-      const r = c.getBoundingClientRect();
       const dpr = Math.min(3, window.devicePixelRatio || 1);
-      c.width = Math.round(r.width * dpr);
-      c.height = Math.round(r.height * dpr);
+      const width = Math.round(c.clientWidth * dpr), height = Math.round(c.clientHeight * dpr);
+      if (!width || !height || (c.width === width && c.height === height)) return;
+      // Resizing the backing bitmap clears it. Keep the ink across responsive layout changes
+      // and ignore ResizeObserver's initial notification when the size hasn't changed.
+      const previous = document.createElement('canvas');
+      previous.width = c.width; previous.height = c.height;
+      previous.getContext('2d')!.drawImage(c, 0, 0);
+      c.width = width;
+      c.height = height;
       const g = c.getContext('2d')!;
-      g.scale(dpr, dpr);
+      g.drawImage(previous, 0, 0, width, height);
+      g.scale(width / c.clientWidth, height / c.clientHeight);
       g.lineCap = 'round';
       g.lineJoin = 'round';
       g.strokeStyle = g.fillStyle = INK;
-      setInked(false);
+      last.current = null;
+      pointer.current = null;
     };
     fit();
     const ro = new ResizeObserver(fit);
@@ -41,20 +50,28 @@ export function SignaturePad({ t, disabled, onDone }: { t: Strings; disabled?: b
   const point = (e: PointerEvent<HTMLCanvasElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     const pressure = e.pointerType === 'pen' && e.pressure > 0 ? e.pressure : 0.5;
-    return { x: e.clientX - r.left, y: e.clientY - r.top, w: 1.2 + pressure * 2.6 };
+    return { x: (e.clientX - r.left) * e.currentTarget.offsetWidth / r.width - e.currentTarget.clientLeft,
+      y: (e.clientY - r.top) * e.currentTarget.offsetHeight / r.height - e.currentTarget.clientTop, w: 1.2 + pressure * 2.6 };
   };
 
   const down = (e: PointerEvent<HTMLCanvasElement>) => {
-    if (disabled) return;
+    if (disabled || pointer.current !== null || e.button !== 0) return;
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
+    pointer.current = e.pointerId;
     last.current = point(e);
+    const g = e.currentTarget.getContext('2d')!;
+    const p = last.current;
+    g.beginPath();
+    g.arc(p.x, p.y, p.w / 2, 0, Math.PI * 2);
+    g.fill();
+    setInked(true);
     setTyped('');
   };
   const move = (e: PointerEvent<HTMLCanvasElement>) => {
     const g = canvas.current?.getContext('2d');
     const p0 = last.current;
-    if (!g || !p0) return;
+    if (disabled || pointer.current !== e.pointerId || !g || !p0) return;
     const p = point(e);
     // A quadratic curve through the midpoint smooths out jagged pointer samples.
     const mx = (p0.x + p.x) / 2, my = (p0.y + p.y) / 2;
@@ -67,12 +84,20 @@ export function SignaturePad({ t, disabled, onDone }: { t: Strings; disabled?: b
     last.current = p;
     setInked(true);
   };
-  const up = () => { last.current = null; };
+  const up = (e: PointerEvent<HTMLCanvasElement>) => {
+    if (pointer.current !== e.pointerId) return;
+    if (e.type === 'pointerup') move(e);
+    last.current = null;
+    pointer.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+  };
 
   const clear = () => {
     const c = canvas.current;
     if (!c) return;
     c.getContext('2d')!.clearRect(0, 0, c.width, c.height);
+    last.current = null;
+    pointer.current = null;
     setInked(false);
   };
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  buildReport, createSession, SessionController, ToolRunner,
+  buildReport, createSession, SessionController, suggestCanonicalKey, ToolRunner,
   type FieldWriter, type SessionEvent, type ToolHost,
 } from '../src';
 import { DEMO_FORM, DEMO_FORM_TITLE } from './fixtures';
@@ -85,6 +85,24 @@ describe('confirm gate (FR-16, AC-03)', () => {
 });
 
 describe('tool runner (FR-23)', () => {
+  it('keeps signatures local and requires the user to draw and confirm them', async () => {
+    const { runner, ctl, writer } = setup();
+    ctl.session.questions = ctl.session.questions.map((q) => q.id === 'q1'
+      ? { ...q, type: 'signature', label: 'Signature of the student' } : q);
+    const png = 'data:image/png;base64,iVBORw0KGgo=';
+    expect((await runner.run(call('propose_fill', { questionId: 'q1', value: png, source: 'typed' }))).ok).toBe(false);
+    expect(ctl.propose('q1', png, 'typed').ok).toBe(true);
+    expect(writer.write).not.toHaveBeenCalled();
+    const proposed = await runner.run(call('get_current_question', {}));
+    expect(proposed.content).toContain('proposed');
+    expect(proposed.content).not.toContain(png);
+    await ctl.confirm('q1');
+    expect(writer.write).toHaveBeenCalledOnce();
+    expect((await runner.run(call('get_current_question', {}))).content).not.toContain(png);
+    expect(suggestCanonicalKey(ctl.session.questions[0]!)).toBeNull();
+    expect(JSON.stringify(buildReport(ctl.session))).not.toContain(png);
+  });
+
   it('rejects invalid arguments and logs the rejection', async () => {
     const { runner, events } = setup();
     const r = await runner.run(call('propose_fill', { questionId: 'q1' }));

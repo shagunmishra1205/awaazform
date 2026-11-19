@@ -87,7 +87,11 @@ export class ToolRunner {
 
       case 'get_current_question': {
         const cur = s.questions[s.currentIndex];
-        return JSON.stringify(cur ? { ...cur, answer: s.answers[cur.id] } : null);
+        const answer = cur ? s.answers[cur.id] : undefined;
+        // The model may inspect progress, but the user's signature stays on this device.
+        return JSON.stringify(cur ? { ...cur, answer: cur.type === 'signature' && answer
+          ? { questionId: answer.questionId, status: answer.status }
+          : answer } : null);
       }
 
       case 'ask_user':

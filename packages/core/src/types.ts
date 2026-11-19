@@ -6,7 +6,7 @@ export type FieldType =
   | 'dropdown' | 'scale'
   /** A file the user picks themselves (web pages with a plain file input, through the extension). */
   | 'file'
-  /** A signature the user draws on screen (printed PDFs). The value is a PNG data URL; it is never saved or sent to the AI. */
+  /** A signature drawn on screen (printed PDFs). A PNG data URL kept in the local session, never a profile or AI request. */
   | 'signature';
 
 /** A rectangle in PDF user space (points, origin bottom-left), on a 0-based page. */
