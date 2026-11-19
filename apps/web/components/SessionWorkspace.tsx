@@ -1,7 +1,7 @@
 'use client';
 
 import {
-  canSave, cleanSpokenAnswer, commandWords, createShield, parseVoiceCommand, SessionController, suggestCanonicalKey, ToolRunner, validateAnswer,
+  canSave, cleanSpokenAnswer, commandWords, createShield, matchOption, parseVoiceCommand, SessionController, suggestCanonicalKey, ToolRunner, validateAnswer,
   type CanonicalKey, type FieldWriter, type FormQuestion, type Language, type Profile, type Session, type ToolHost,
 } from '@awaazform/core';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -16,6 +16,7 @@ import { AiUnavailable, assistantTurn, explainQuestion, fallbackExplanation, typ
 import { db, ensureDefaultProfile, saveValue } from '@/lib/db';
 import { fmt, LANGUAGE_META, localizeMessage, Rich, type Strings } from '@/lib/i18n';
 import { LiveListener } from '@/lib/live';
+import { translateQuestions, type QuestionTexts } from '@/lib/question-i18n';
 import { saveSession } from '@/lib/session-store';
 import { useSettings } from '@/lib/settings';
 import type { SurfaceHandle } from '@/lib/surface';
@@ -45,6 +46,16 @@ export function displayValue(q: FormQuestion, v: string, lang: Language): string
     return new Date(`${v}T00:00:00`).toLocaleDateString(LANGUAGE_META[lang]?.locale ?? 'en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
   }
   return v;
+}
+
+/** An answer as the user should hear it: option answers in their language, everything else as filled. */
+function shownAnswer(q: FormQuestion, v: string, lang: Language, texts: QuestionTexts): string {
+  const tr = texts[q.id]?.options;
+  if (tr && q.options?.length) {
+    const parts = v.split(', ').map((x) => { const i = q.options!.indexOf(x); return i >= 0 ? tr[i] ?? x : x; });
+    return parts.join(', ');
+  }
+  return displayValue(q, v, lang);
 }
 
 export interface WorkspaceProps {
@@ -86,6 +97,10 @@ export function SessionWorkspace(props: WorkspaceProps) {
   const [liveDialog, setLiveDialog] = useState(false);
   const [unlockDialog, setUnlockDialog] = useState(false);
   const [turns, setTurns] = useState<Turn[]>([]);
+  /** The form's questions in the interface language (shown and spoken; the form keeps its own words). */
+  const [qt, setQt] = useState<QuestionTexts>({});
+  const qtRef = useRef(qt);
+  qtRef.current = qt;
   /** Conversational mode: all proposed answers are read back together, then filled on one yes. */
   const [reviewing, setReviewing] = useState(false);
   const reviewingRef = useRef(false);
@@ -199,6 +214,16 @@ export function SessionWorkspace(props: WorkspaceProps) {
 
   useEffect(() => surfaceRef.current?.setReduceMotion(reduceMotion), [reduceMotion, surfaceRef]);
 
+  // Ask the form's questions in the user's language: translate them once per form and language.
+  const questionKey = session.questions.map((x) => x.id).join('|');
+  useEffect(() => {
+    if (lang === 'en') return setQt({});
+    let live = true;
+    translateQuestions(session.questions, lang).then((m) => live && setQt(m)).catch(() => live && setQt({}));
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questionKey, lang]);
+
   // Say so once if this device can't read the chosen language aloud; everything is still on screen.
   useEffect(() => {
     if (!started || typeof speechSynthesis === 'undefined') return;
@@ -228,14 +253,15 @@ export function SessionWorkspace(props: WorkspaceProps) {
     const cq = c.session.questions[c.session.currentIndex]!;
     const a = c.session.answers[cq.id]!;
     const tt = latest.current.t;
-    const parts = [cq.label, cq.required ? '' : `(${tt.common.optional})`];
+    const tq = qtRef.current[cq.id];
+    const parts = [tq?.label ?? cq.label, cq.required ? '' : `(${tt.common.optional})`];
     // An answer already proposed (e.g. given earlier in one breath with others) is read back, not asked again.
     if (a.status === 'proposed' && a.normalized) {
       parts.push(`${displayValue(cq, a.normalized, latest.current.settings.language)}. ${tt.session.is_this_right}`);
       setTimeout(() => inputRef.current?.focus(), 60);
       return void say(parts.filter(Boolean).join(' '));
     }
-    if (cq.options?.length && cq.type !== 'yesno') parts.push(optionsIntro(tt, cq.options), isMulti(cq) ? tt.session.multi_hint : '');
+    if (cq.options?.length && cq.type !== 'yesno') parts.push(optionsIntro(tt, tq?.options ?? cq.options), isMulti(cq) ? tt.session.multi_hint : '');
     if (cq.support === 'unsupported') {
       parts.push(tt.session.not_supported, localizeMessage(tt, cq.supportReason));
       // Live Mode never waits on a question AwaazForm can't fill (a file upload, say): it says so and moves on.
@@ -276,7 +302,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
     if (!list.length) return void say(tt.session.nothing_to_fill, true);
     setReviewing(true);
     const c = ctlRef.current!;
-    const items = list.map((x) => `${x.label.replace(/[\s:：-]+$/u, '')}: ${displayValue(x, c.session.answers[x.id]!.normalized ?? '', langNow)}`).join('. ');
+    const items = list.map((x) => `${(qtRef.current[x.id]?.label ?? x.label).replace(/[\s:：-]+$/u, '')}: ${shownAnswer(x, c.session.answers[x.id]!.normalized ?? '', langNow, qtRef.current)}`).join('. ');
     await say(`${tt.session.review_intro} ${items}. ${fmt(tt.session.review_ask, commandWords(langNow))}`, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [say]);
@@ -339,11 +365,11 @@ export function SessionWorkspace(props: WorkspaceProps) {
     const shown = (v: string) => displayValue(question, v, latest.current.settings.language).replace(/[.!?।]+$/u, '');
     if (a?.status === 'proposed' && a.normalized && endMode()) {
       // Conversational: a short acknowledgement and on to the next question; the check comes at the end.
-      await say(fmt(latest.current.t.session.got_it, { value: shown(a.normalized) }));
+      await say(fmt(latest.current.t.session.got_it, { value: shown(shownAnswer(question, a.normalized, latest.current.settings.language, qtRef.current)) }));
       return advance();
     }
     if (a?.status === 'proposed' && a.normalized) {
-      await say(`${shown(a.normalized)}. ${latest.current.t.session.is_this_right}`);
+      await say(`${shown(shownAnswer(question, a.normalized, latest.current.settings.language, qtRef.current))}. ${latest.current.t.session.is_this_right}`);
     } else if (a?.status === 'invalid' && a.error) {
       await say(localizeMessage(latest.current.t, a.error));
     }
@@ -358,6 +384,12 @@ export function SessionWorkspace(props: WorkspaceProps) {
     setOffer(null);
     setBubble(null);
 
+    // An option said or typed in the user's language ("छात्र") stands for the form's own option ("Student").
+    const trOpts = qtRef.current[cq.id]?.options;
+    if (trOpts && cq.options?.length) {
+      const hit = matchOption(raw, trOpts);
+      if (hit) raw = cq.options[trOpts.indexOf(hit)] ?? raw;
+    }
     // Fast path: a short answer that clearly picks an option needs no AI round trip.
     const short = raw.trim().split(/\s+/).length <= 4;
     const quick = source === 'spoken' && short && OPTION_TYPES.includes(cq.type) && validateAnswer(cq, raw).ok;
@@ -716,7 +748,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
                   return (
                     <li key={x.id} className="flex items-center justify-between gap-3 rounded-[var(--r-12)] border border-line bg-surface p-3">
                       <span className="min-w-0">
-                        <span className="block text-xs text-muted">{i + 1}. {x.label}</span>
+                        <span className="block text-xs text-muted">{i + 1}. {qt[x.id]?.label ?? x.label}</span>
                         <span className="block font-semibold break-words">{displayValue(x, a.normalized ?? '', lang)}</span>
                       </span>
                       <button type="button" className="btn btn-ghost flex-none" onClick={() => { setReviewing(false); void present(i); }}>{t.common.edit}</button>
@@ -741,11 +773,12 @@ export function SessionWorkspace(props: WorkspaceProps) {
 
               <AnimatePresence mode="wait">
                 <motion.div key={q.id} initial={reduceMotion ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? undefined : { opacity: 0, y: -8 }} transition={{ duration: 0.3, ease: EASE }} className="grid gap-2">
-                  <h2 id="q-label" className="text-[1.75rem] leading-tight">{q.label}</h2>
-                  {q.helpText && <p className="text-muted">{q.helpText}</p>}
+                  <h2 id="q-label" className="text-[1.75rem] leading-tight">{qt[q.id]?.label ?? q.label}</h2>
+                  {qt[q.id] && qt[q.id]!.label !== q.label && <p className="text-xs text-muted" lang="und"><span className="sr-only">{t.session.original}: </span>{q.label}</p>}
+                  {q.helpText && <p className="text-muted">{qt[q.id]?.helpText ?? q.helpText}</p>}
                   {q.options && q.type !== 'yesno' && !answering && (
                     <ul className="mt-1 flex flex-wrap gap-1.5" aria-label={t.session.options}>
-                      {q.options.map((o) => <li key={o} className="chip !py-1 !text-sm">{o}</li>)}
+                      {q.options.map((o, i) => <li key={o} className="chip !py-1 !text-sm">{qt[q.id]?.options?.[i] ?? o}</li>)}
                     </ul>
                   )}
                 </motion.div>
@@ -792,7 +825,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
                     <LivePanel state={live} level={level} t={t} turns={turns} words={commandWords(lang)} />
                   ) : null}
                   {OPTION_TYPES.includes(q.type) && optionsOf(q).length > 0 && (
-                    <OptionPicker key={q.id} q={q} t={t} disabled={!!busy} onPick={(v) => void submit(v, 'typed')} />
+                    <OptionPicker key={q.id} q={q} t={t} shown={qt[q.id]?.options} disabled={!!busy} onPick={(v) => void submit(v, 'typed')} />
                   )}
                   <div className="composer" data-invalid={answer.status === 'invalid'}>
                     <input id="answer" ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} placeholder={live !== 'off' ? t.session.or_type : t.session.type_answer}
@@ -936,11 +969,12 @@ function LivePanel({ state, level, t, turns, words }: { state: LiveState; level:
 }
 
 /** Tap targets for option questions. One tap proposes a single choice; multi-select collects, then proposes. */
-function OptionPicker({ q, t, disabled, onPick }: { q: FormQuestion; t: Strings; disabled: boolean; onPick: (value: string) => void }) {
+function OptionPicker({ q, t, shown, disabled, onPick }: { q: FormQuestion; t: Strings; shown?: string[]; disabled: boolean; onPick: (value: string) => void }) {
   const options = optionsOf(q);
   const multi = isMulti(q);
   const [picked, setPicked] = useState<string[]>([]);
-  const label = (o: string) => (q.type === 'yesno' && !q.options?.length ? (o === 'Yes' ? t.common.yes : t.common.no) : o);
+  // Shown in the user's language; the form still gets its own option text.
+  const label = (o: string) => (q.type === 'yesno' && !q.options?.length ? (o === 'Yes' ? t.common.yes : t.common.no) : shown?.[q.options?.indexOf(o) ?? -1] ?? o);
   const numbered = options.length <= 9 && q.type !== 'yesno' && q.type !== 'scale';
   return (
     <fieldset className="grid gap-2" disabled={disabled}>

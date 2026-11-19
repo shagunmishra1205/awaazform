@@ -533,6 +533,7 @@ export const en = {
     unlock: 'Unlock',
     you: 'You',
     conversation: 'Conversation',
+    original: 'In the form’s words',
     got_it: 'Got it: {value}.',
     review_title: 'Here’s what I have',
     review_intro: 'Here’s what I have.',

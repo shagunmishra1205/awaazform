@@ -3,7 +3,7 @@
 // through the content script; the model can only propose, and only the Yes button or a spoken “yes”
 // (matched in code) confirms. Nothing is ever submitted.
 import {
-  cleanSpokenAnswer, commandWords, createSession, createShield, LANGUAGES, parseVoiceCommand, SessionController, ToolRunner, validateAnswer,
+  cleanSpokenAnswer, commandWords, createSession, createShield, matchOption, LANGUAGES, parseVoiceCommand, SessionController, ToolRunner, validateAnswer,
   type FieldWriter, type FormQuestion, type Language, type Session, type ToolHost,
 } from '@awaazform/core';
 import { setApiBase } from '@/lib/api';
@@ -12,6 +12,7 @@ import { mountBolu, type BoluState } from '@/lib/bolu';
 import { en, fmt, LANGUAGE_META, localizeMessage, type Strings } from '@/lib/i18n/core';
 import { LiveListener } from '@/lib/live';
 import { formKey, toQuestions, type ScanResult } from '@/lib/page-questions';
+import { translateQuestions, type QuestionTexts } from '@/lib/question-i18n';
 import { isSpeaking, speakSentences, sttHint, stopSpeaking, transcribe, VoiceError, voiceInputSupported } from '@/lib/voice';
 
 declare const __AWAAZ_SERVER__: string;
@@ -104,6 +105,13 @@ let timer: ReturnType<typeof setInterval> | null = null;
 const turns: { who: 'you' | 'ai'; text: string }[] = [];
 /** Files the user picked for file questions, kept in memory only until they are attached. */
 const files = new Map<string, File>();
+/** The form's questions in the user's language, for showing and speaking (the form keeps its words). */
+let qt: QuestionTexts = {};
+async function refreshTexts() {
+  const s = session();
+  qt = s && lang !== 'en' ? await translateQuestions(s.questions, lang).catch(() => ({})) : {};
+  render();
+}
 const MAX_FILE = 20 * 1024 * 1024;
 
 function toBase64(buf: ArrayBuffer): string {
@@ -207,7 +215,7 @@ function render() {
     $('q-label').textContent = t.widget.hello;
   } else {
     $('q-meta').textContent = fmt(t.widget.question, { n: s.currentIndex + 1, total: s.questions.length });
-    $('q-label').textContent = q.label;
+    $('q-label').textContent = qt[q.id]?.label ?? q.label;
   }
 
   const opts = $('opts');
@@ -228,7 +236,7 @@ function render() {
       b.type = 'button';
       b.className = 'opt';
       if (isMulti(q)) b.setAttribute('aria-pressed', String(picked.includes(o)));
-      const label = q.type === 'yesno' && !q.options?.length ? (o === 'Yes' ? t.common.yes : t.common.no) : o;
+      const label = q.type === 'yesno' && !q.options?.length ? (o === 'Yes' ? t.common.yes : t.common.no) : qt[q.id]?.options?.[i] ?? o;
       b.innerHTML = list.length <= 9 && q.type !== 'yesno' && q.type !== 'scale' ? `<span class="n">${i + 1}</span>` : '';
       b.append(label);
       b.onclick = () => {
@@ -374,6 +382,7 @@ async function scanPage() {
     s = createSession({ id: crypto.randomUUID(), formTitle: result.title || 'Form', questions, language: lang });
   }
   startController(s);
+  void refreshTexts();
   phase = Object.values(s.answers).some((a) => a.status !== 'pending') ? 'paused' : 'ready';
   setBolu('idle');
   render();
@@ -417,7 +426,7 @@ async function present(index: number) {
   const q = current()!;
   const a = answerOf(q)!;
   render();
-  const parts = [q.label, q.required ? '' : `(${t.common.optional})`];
+  const parts = [qt[q.id]?.label ?? q.label, q.required ? '' : `(${t.common.optional})`];
   if (a.status === 'proposed' && a.normalized) {
     parts.push(`${a.normalized}. ${t.session.is_this_right}`);
   } else if (q.support === 'unsupported') {
@@ -425,7 +434,8 @@ async function present(index: number) {
   } else if (q.type === 'file') {
     parts.push(t.widget.file_ask);
   } else if (q.options?.length && q.type !== 'yesno') {
-    parts.push(q.options.length > 8 ? fmt(t.session.options_many, { n: q.options.length }) : fmt(t.session.options_intro, { list: q.options.map((o, i) => `${i + 1}, ${o}`).join('; ') }));
+    const said = qt[q.id]?.options ?? q.options;
+    parts.push(said.length > 8 ? fmt(t.session.options_many, { n: said.length }) : fmt(t.session.options_intro, { list: said.map((o, i) => `${i + 1}, ${o}`).join('; ') }));
     if (isMulti(q)) parts.push(t.session.multi_hint);
   }
   if (q.support === 'unsupported' && phase === 'live') {
@@ -462,6 +472,12 @@ async function submit(raw: string, source: 'typed' | 'spoken') {
   if (q.support === 'unsupported') { note = { text: t.widget.fill_yourself, tone: 'warn' }; return render(); }
   note = null;
   if (source === 'typed') addTurn('you', raw);
+  // An option in the user's language ("छात्र") stands for the form's own option ("Student").
+  const trOpts = qt[q.id]?.options;
+  if (trOpts && q.options?.length) {
+    const hit = matchOption(raw, trOpts);
+    if (hit) raw = q.options[trOpts.indexOf(hit)] ?? raw;
+  }
   const quick = raw.trim().split(/\s+/).length <= 4 && OPTION_TYPES.includes(q.type) && validateAnswer(q, raw).ok;
   const needsAi = source === 'spoken' ? !quick : OPTION_TYPES.includes(q.type) && !validateAnswer(q, raw).ok;
   if (needsAi) {
@@ -684,6 +700,7 @@ async function init() {
   select.onchange = async () => {
     await chrome.storage.local.set({ language: select.value });
     await loadLanguage(select.value as Language);
+    await refreshTexts();
   };
   $<HTMLInputElement>('server').value = server;
 
