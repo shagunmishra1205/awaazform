@@ -1,10 +1,11 @@
 import { config, errorResponse, groqFetch } from '@/lib/groq';
 import { rateLimit, tooMany } from '@/lib/rate-limit';
+import { guard, preflight, withCors } from '@/lib/guard';
 
 export const runtime = 'nodejs';
 
 // Text-to-speech. If no TTS model is configured, the client falls back to speechSynthesis.
-export async function POST(req: Request) {
+async function handlePost(req: Request): Promise<Response> {
   if (!rateLimit(req, 'tts', 60)) return tooMany();
   if (!config.ttsModel) return Response.json({ error: 'TTS not configured', fallback: 'speechSynthesis' }, { status: 501 });
   try {
@@ -24,6 +25,21 @@ export async function POST(req: Request) {
 }
 
 /** Capability check, so clients don't have to probe with a failing POST. */
-export function GET() {
+function handleGet(): Response {
   return Response.json({ available: !!config.ttsModel });
+}
+
+/** Same-origin pages and the AwaazForm extension only (lib/guard.ts). */
+export async function POST(req: Request) {
+  const g = guard(req);
+  if (!g.ok) return g.response;
+  return withCors(await handlePost(req), g);
+}
+
+export const OPTIONS = preflight;
+
+export function GET(req: Request) {
+  const g = guard(req);
+  if (!g.ok) return g.response;
+  return withCors(handleGet(), g);
 }

@@ -1,6 +1,8 @@
 'use client';
 
+import { apiUrl } from './api';
 import type { Language } from '@awaazform/core';
+import { LANGUAGE_META } from '@/lib/i18n/core';
 
 // Voice I/O: record → /api/stt, and speak via /api/tts with a speechSynthesis fallback.
 
@@ -58,7 +60,7 @@ export async function transcribe(audio: Blob, language: Language): Promise<strin
   const body = new FormData();
   body.set('audio', audio);
   body.set('language', language);
-  const res = await fetch('/api/stt', { method: 'POST', body });
+  const res = await fetch(apiUrl('/api/stt'), { method: 'POST', body });
   const json = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
   if (!res.ok) throw new VoiceError(json.error ?? 'Transcription failed', 'ai');
   if (!json.text) throw new VoiceError("I didn't catch that", 'empty');
@@ -68,7 +70,7 @@ export async function transcribe(audio: Blob, language: Language): Promise<strin
 let current: HTMLAudioElement | null = null;
 let ttsCheck: Promise<boolean> | null = null;
 const groqTtsAvailable = () =>
-  (ttsCheck ??= fetch('/api/tts').then((r) => r.json()).then((j: { available?: boolean }) => !!j.available).catch(() => false));
+  (ttsCheck ??= fetch(apiUrl('/api/tts')).then((r) => r.json()).then((j: { available?: boolean }) => !!j.available).catch(() => false));
 let speaking = false;
 export const isSpeaking = () => speaking;
 
@@ -95,10 +97,10 @@ export async function speak(text: string, opts: { language: Language; rate?: num
 }
 
 async function speakInner(text: string, opts: { language: Language; rate?: number; voiceURI?: string }): Promise<void> {
-  // Groq's TTS models are English-only; Hindi always uses the device voice.
+  // Groq's TTS models are English-only; Hindi and Marathi use the device voice.
   if (opts.language === 'en' && (await groqTtsAvailable())) {
     try {
-      const res = await fetch('/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+      const res = await fetch(apiUrl('/api/tts'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
       if (res.ok) {
         const url = URL.createObjectURL(await res.blob());
         const audio = new Audio(url);
@@ -117,15 +119,36 @@ async function speakInner(text: string, opts: { language: Language; rate?: numbe
     }
   }
   if (typeof speechSynthesis === 'undefined') return;
+  const voice = pickVoice(opts.language, opts.voiceURI);
+  // No voice for this language: stay silent rather than read it with a wrong-language voice. The text is on screen.
+  if (!voice && opts.language !== 'en') return;
   await new Promise<void>((resolve) => {
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = opts.language === 'hi' ? 'hi-IN' : 'en-IN';
+    u.lang = LANGUAGE_META[opts.language]?.locale ?? 'en-IN';
     u.rate = opts.rate ?? 1;
-    const voice = speechSynthesis.getVoices().find((v) => (opts.voiceURI ? v.voiceURI === opts.voiceURI : v.lang.startsWith(u.lang.slice(0, 2))));
     if (voice) u.voice = voice;
     u.onend = u.onerror = () => resolve();
     speechSynthesis.speak(u);
   });
+}
+
+/** Devanagari languages without their own voice can borrow a Hindi one. */
+const BORROW: Partial<Record<Language, string>> = { mr: 'hi', ne: 'hi' };
+
+function pickVoice(lang: Language, voiceURI?: string): SpeechSynthesisVoice | undefined {
+  const voices = speechSynthesis.getVoices();
+  if (voiceURI) {
+    const chosen = voices.find((v) => v.voiceURI === voiceURI);
+    if (chosen && chosen.lang.toLowerCase().startsWith(lang)) return chosen;
+  }
+  const by = (code: string) => voices.find((v) => v.lang.toLowerCase().startsWith(code) && /IN|NP|PK/i.test(v.lang)) ?? voices.find((v) => v.lang.toLowerCase().startsWith(code));
+  return by(lang) ?? (BORROW[lang] ? by(BORROW[lang]!) : undefined);
+}
+
+/** Whether this device can read the language aloud (its own voice, or a borrowed one). */
+export function voiceAvailable(lang: Language): boolean {
+  if (typeof speechSynthesis === 'undefined') return false;
+  return lang === 'en' || !!pickVoice(lang);
 }
 
 /** Speaks a reply one sentence at a time, so speech starts sooner and barge-in can stop it between sentences (FR-41). */

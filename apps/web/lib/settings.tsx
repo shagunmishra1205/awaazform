@@ -1,8 +1,8 @@
 'use client';
 
-import type { Language } from '@awaazform/core';
+import { LANGUAGES, type Language } from '@awaazform/core';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { strings, type Strings } from './i18n';
+import { en, LANGUAGE_META, loadStrings, type Strings } from './i18n';
 
 export interface Settings {
   language: Language;
@@ -11,22 +11,26 @@ export interface Settings {
   motion: 'system' | 'reduce';
   speechRate: number;
   voiceURI: string;
+  /** Hide emails, phone and ID numbers from the AI (restored locally). */
+  privacyShield: boolean;
 }
 
-const DEFAULTS: Settings = { language: 'en', contrast: 'normal', text: 'normal', motion: 'system', speechRate: 1, voiceURI: '' };
+const DEFAULTS: Settings = { language: 'en', contrast: 'normal', text: 'normal', motion: 'system', speechRate: 1, voiceURI: '', privacyShield: true };
 const KEY = 'awaazform.settings';
 
 export function loadSettings(): Settings {
   if (typeof window === 'undefined') return DEFAULTS;
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
+    const s = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') } as Settings;
+    if (!LANGUAGES.includes(s.language)) s.language = 'en';
+    return s;
   } catch {
     return DEFAULTS;
   }
 }
 
 /** Inline script applied before paint, so saved themes don't flash (FR-47 persistence). */
-export const settingsBootScript = `try{var s=JSON.parse(localStorage.getItem('${KEY}')||'{}'),d=document.documentElement;if(s.contrast)d.dataset.contrast=s.contrast;if(s.text)d.dataset.text=s.text;if(s.motion)d.dataset.motion=s.motion;if(s.language)d.lang=s.language}catch(e){}`;
+export const settingsBootScript = `try{var s=JSON.parse(localStorage.getItem('${KEY}')||'{}'),d=document.documentElement;if(s.contrast)d.dataset.contrast=s.contrast;if(s.text)d.dataset.text=s.text;if(s.motion)d.dataset.motion=s.motion;if(s.language){d.lang=s.language;d.dir=s.language==='ur'?'rtl':'ltr'}}catch(e){}`;
 
 interface Ctx {
   settings: Settings;
@@ -56,7 +60,16 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     d.dataset.text = settings.text;
     d.dataset.motion = settings.motion;
     d.lang = settings.language;
+    d.dir = LANGUAGE_META[settings.language]?.dir ?? 'ltr';
   }, [settings]);
+
+  // Each language's strings load as their own chunk; English shows until they arrive.
+  const [t, setT] = useState<Strings>(en);
+  useEffect(() => {
+    let live = true;
+    void loadStrings(settings.language).then((s) => live && setT(s));
+    return () => { live = false; };
+  }, [settings.language]);
 
   const update = (patch: Partial<Settings>) =>
     setSettings((prev) => {
@@ -67,7 +80,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   return (
     <SettingsContext.Provider
-      value={{ settings, update, t: strings[settings.language], reduceMotion: settings.motion === 'reduce' || systemReduce }}
+      value={{ settings, update, t, reduceMotion: settings.motion === 'reduce' || systemReduce }}
     >
       {children}
     </SettingsContext.Provider>

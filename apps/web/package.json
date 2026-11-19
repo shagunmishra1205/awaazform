@@ -8,15 +8,18 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "echo \"web: no unit tests yet\"",
-    "test:e2e": "node e2e/session.e2e.mjs && node e2e/pdf.e2e.mjs && node e2e/gform.e2e.mjs",
+    "test:e2e": "node e2e/session.e2e.mjs && node e2e/options.e2e.mjs && node e2e/pdf.e2e.mjs && node e2e/gform.e2e.mjs && node e2e/msform.e2e.mjs && node e2e/docx.e2e.mjs && node e2e/extension-content.e2e.mjs",
     "predev": "node scripts/copy-pdf-worker.mjs",
-    "prebuild": "node scripts/copy-pdf-worker.mjs",
-    "test:a11y": "node e2e/a11y.e2e.mjs"
+    "prebuild": "node scripts/copy-pdf-worker.mjs && node ../extension/build.mjs",
+    "test:a11y": "node e2e/a11y.e2e.mjs",
+    "test:security": "node e2e/security.e2e.mjs",
+    "test:extension": "node e2e/extension.e2e.mjs"
   },
   "dependencies": {
     "@awaazform/core": "workspace:*",
     "dexie": "^4.4.7",
     "dexie-react-hooks": "^4.4.0",
+    "fflate": "0.8.2",
     "motion": "^14.9.0",
     "next": "^16.4.3",
     "pdf-lib": "^1.17.1",

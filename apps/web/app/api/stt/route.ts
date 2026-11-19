@@ -1,10 +1,11 @@
 import { config, errorResponse, groqFetch } from '@/lib/groq';
 import { rateLimit, tooMany } from '@/lib/rate-limit';
+import { guard, preflight, withCors } from '@/lib/guard';
 
 export const runtime = 'nodejs';
 
 // Speech-to-text. Audio is forwarded to Groq and never written to disk (§9.4).
-export async function POST(req: Request) {
+async function handlePost(req: Request): Promise<Response> {
   if (!rateLimit(req, 'stt')) return tooMany();
   try {
     const len = Number(req.headers.get('content-length') ?? 0);
@@ -21,7 +22,7 @@ export async function POST(req: Request) {
     body.set('model', config.sttModel);
     body.set('response_format', 'json');
     body.set('temperature', '0');
-    if (language === 'hi' || language === 'en') body.set('language', language);
+    if (language === 'hi' || language === 'en' || language === 'mr') body.set('language', language);
 
     const res = await groqFetch('/audio/transcriptions', { method: 'POST', body });
     const json = (await res.json()) as { text?: string };
@@ -30,3 +31,12 @@ export async function POST(req: Request) {
     return errorResponse(err);
   }
 }
+
+/** Same-origin pages and the AwaazForm extension only (lib/guard.ts). */
+export async function POST(req: Request) {
+  const g = guard(req);
+  if (!g.ok) return g.response;
+  return withCors(await handlePost(req), g);
+}
+
+export const OPTIONS = preflight;

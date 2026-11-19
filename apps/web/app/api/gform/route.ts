@@ -1,6 +1,7 @@
-import { extractGoogleFormData, googleFormUrl, parseGoogleForm, parseGoogleFormUrl } from '@awaazform/core';
+import { canonicalFormId, extractGoogleFormData, googleFormUrl, parseGoogleForm, parseGoogleFormUrl } from '@awaazform/core';
 import { z } from 'zod';
 import { rateLimit, tooMany } from '@/lib/rate-limit';
+import { guard, preflight, withCors } from '@/lib/guard';
 
 export const runtime = 'nodejs';
 
@@ -37,28 +38,31 @@ async function readCapped(res: Response): Promise<string | null> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-export async function POST(req: Request) {
+async function handlePost(req: Request): Promise<Response> {
   if (!rateLimit(req, 'gform', 20)) return tooMany();
   const parsed = Input.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return fail('Please paste a Google Form link.');
 
-  let link = parseGoogleFormUrl(parsed.data.url);
+  const link = parseGoogleFormUrl(parsed.data.url);
+  if (!link) return fail('This doesn’t look like a Google Form link. It should start with docs.google.com/forms or forms.gle.');
   try {
-    if (link?.kind === 'short') {
-      const res = await get(link.url);
-      link = parseGoogleFormUrl(res.headers.get('location') ?? '');
-      if (link?.kind === 'short') link = null;
+    // Follow redirects one hop at a time, only between Google Forms hosts (forms.gle → docs.google.com …).
+    let url = link.kind === 'short' ? link.url : googleFormUrl(link.kind === 'form' ? link.formId : `d/${link.docId}`);
+    let res: Response | null = null;
+    for (let hop = 0; hop < 5; hop++) {
+      res = await get(url);
+      if (res.status < 300 || res.status >= 400) break;
+      const to = new URL(res.headers.get('location') ?? '', url);
+      if (/^accounts\.google\.com$/.test(to.hostname) || /ServiceLogin/.test(to.pathname)) {
+        return fail(link.kind === 'doc' && link.edit
+          ? 'This is the form’s editing link. Use the link you’d send to people who fill it in (Send → link).'
+          : 'This form needs a Google sign-in, so AwaazForm can’t read it. Fill it on Google Forms directly.', 422);
+      }
+      if (to.protocol !== 'https:' || !['docs.google.com', 'forms.gle'].includes(to.hostname)) return fail('Google redirected this form somewhere unexpected.', 422);
+      url = to.toString();
+      res = null;
     }
-    if (!link) return fail('This doesn’t look like a Google Form link. It should start with docs.google.com/forms or forms.gle.');
-    if (link.kind === 'edit') return fail('This is the form’s editing link. Use the link you’d send to people who fill it in (Send → link).');
-
-    const formId = link.formId;
-    const res = await get(googleFormUrl(formId));
-    if (res.status >= 300 && res.status < 400) {
-      const to = res.headers.get('location') ?? '';
-      if (/accounts\.google\.com|ServiceLogin/.test(to)) return fail('This form needs a Google sign-in, so AwaazForm can’t read it. Fill it on Google Forms directly.', 422);
-      return fail('Google redirected this form somewhere unexpected.', 422);
-    }
+    if (!res) return fail('Google redirected this form too many times.', 422);
     if (res.status === 404) return fail('No form was found at this link. Check that it’s complete.', 404);
     if (!res.ok) return fail(`Google Forms returned an error (${res.status}). Try again in a moment.`, 502);
 
@@ -69,6 +73,9 @@ export async function POST(req: Request) {
       if (/no longer accepting responses|closedform/i.test(html)) return fail('This form is no longer accepting responses.', 422);
       return fail('AwaazForm couldn’t read the questions on this form.', 422);
     }
+    const final = parseGoogleFormUrl(url);
+    const formId = canonicalFormId(data) ?? (final?.kind === 'form' ? final.formId : final?.kind === 'doc' ? `d/${final.docId}` : null);
+    if (!formId) return fail('AwaazForm couldn’t work out this form’s address.', 422);
     const form = parseGoogleForm(data, formId);
     if (form.questions.length === 0) return fail('This form has no questions to fill.', 422);
     return Response.json({ formId, ...form });
@@ -77,3 +84,12 @@ export async function POST(req: Request) {
     return fail(timeout ? 'Google Forms took too long to respond. Try again.' : 'AwaazForm couldn’t reach Google Forms. Try again.', 502);
   }
 }
+
+/** Same-origin pages and the AwaazForm extension only (lib/guard.ts). */
+export async function POST(req: Request) {
+  const g = guard(req);
+  if (!g.ok) return g.response;
+  return withCors(await handlePost(req), g);
+}
+
+export const OPTIONS = preflight;

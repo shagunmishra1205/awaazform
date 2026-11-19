@@ -16,3 +16,6 @@ media/explainer/audio/master.wav
 # Local agent tooling
 .agents/
 skills-lock.json
+
+# Built by apps/extension/build.mjs (web prebuild)
+apps/web/public/downloads/

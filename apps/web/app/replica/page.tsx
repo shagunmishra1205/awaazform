@@ -6,6 +6,8 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FromReplica, ToReplica } from '@/lib/replica-bridge';
 import { EASE } from '@/components/Motion';
+import { fmt, localizeMessage, type Strings } from '@/lib/i18n';
+import { useSettings } from '@/lib/settings';
 
 type Visual = 'idle' | 'typing' | 'proposed' | 'written' | 'verified' | 'failed';
 
@@ -14,6 +16,8 @@ type Visual = 'idle' | 'typing' | 'proposed' | 'written' | 'verified' | 'failed'
  * read back for verification. Animation: cursor glide → typing → read-back bubble → check.
  */
 export default function ReplicaPage() {
+  const { t } = useSettings();
+  const R = t.replica;
   const [title, setTitle] = useState('');
   const [questions, setQuestions] = useState<FormQuestion[]>([]);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -159,12 +163,12 @@ export default function ReplicaPage() {
   }, []);
 
   return (
-    <div ref={rootRef} className="min-h-screen overflow-x-hidden px-4 py-6 md:px-6" style={{ background: 'var(--bg-subtle)' }} aria-label="Replica of the form being filled">
+    <div ref={rootRef} className="min-h-screen overflow-x-hidden px-4 py-6 md:px-6" style={{ background: 'var(--bg-subtle)' }} aria-label={R.label}>
       <style>{'html{scrollbar-width:thin;overflow-x:hidden}'}</style>
       <div className="mx-auto grid max-w-xl gap-3">
         <header className="rounded-[var(--r-16)] border border-line bg-surface p-5" style={{ borderTop: '8px solid var(--violet-500)' }}>
-          <h1 className="text-xl">{title || 'Loading form…'}</h1>
-          <p className="mt-1 text-xs text-muted">Replica: AwaazForm fills this copy so you can watch. * Required</p>
+          <h1 className="text-xl">{title || R.loading}</h1>
+          <p className="mt-1 text-xs text-muted">{R.note}</p>
         </header>
 
         {questions.map((q, i) => {
@@ -185,13 +189,13 @@ export default function ReplicaPage() {
             >
               <div className="mb-3 flex items-start justify-between gap-3">
                 <label htmlFor={`f-${q.id}`} className="text-sm font-medium">
-                  {i + 1}. {q.label} {q.required && <span aria-label="required" style={{ color: 'var(--red-600)' }}>*</span>}
+                  {i + 1}. {q.label} {q.required && <span aria-label={t.common.required} style={{ color: 'var(--red-600)' }}>*</span>}
                 </label>
-                <StatusMark vis={vis} />
+                <StatusMark vis={vis} t={t} />
               </div>
               {q.helpText && <p className="-mt-2 mb-3 text-xs text-muted">{q.helpText}</p>}
 
-              <Control q={q} value={committed} />
+              <Control q={q} value={committed} t={t} />
 
               {/* Ghost preview while typing / awaiting confirmation */}
               <AnimatePresence>
@@ -204,7 +208,7 @@ export default function ReplicaPage() {
                     className="mt-3 rounded-[var(--r-12)] border border-dashed px-3 py-2 text-sm"
                     style={{ borderColor: 'var(--violet-500)', background: 'var(--violet-100)' }}
                   >
-                    <span className="text-xs text-muted">Proposed: </span>
+                    <span className="text-xs text-muted">{R.proposed} </span>
                     <span className="font-medium">{q.type === 'date' && vis === 'proposed' ? formatDate(pv) : pv}</span>
                     {vis === 'typing' && <span aria-hidden className="ml-0.5 animate-pulse">▍</span>}
                     {vis === 'proposed' && (
@@ -213,22 +217,22 @@ export default function ReplicaPage() {
                         animate={{ opacity: 1, scale: 1 }}
                         className="chip chip-accent ml-2"
                       >
-                        Is this right?
+                        {t.session.is_this_right}
                       </motion.span>
                     )}
                   </motion.div>
                 )}
               </AnimatePresence>
-              {vis === 'failed' && <p className="mt-2 text-xs font-medium" style={{ color: 'var(--amber-700)' }}>Didn&apos;t take. Retry or tell me.</p>}
-              {q.support === 'unsupported' && <p className="mt-2 text-xs text-muted">Not filled by AwaazForm: {q.supportReason}</p>}
+              {vis === 'failed' && <p className="mt-2 text-xs font-medium" style={{ color: 'var(--amber-700)' }}>{R.didnt_take}</p>}
+              {q.support === 'unsupported' && <p className="mt-2 text-xs text-muted">{fmt(R.not_filled, { reason: localizeMessage(t, q.supportReason) })}</p>}
             </section>
           );
         })}
 
         <div className="flex justify-between rounded-[var(--r-16)] border border-line bg-surface p-4">
           {/* Present for realism; AwaazForm never activates it (§9.1). */}
-          <button type="button" className="btn" disabled aria-disabled title="You submit the real form yourself">Submit</button>
-          <span className="self-center text-xs text-muted">You press Submit on the real form yourself.</span>
+          <button type="button" className="btn" disabled aria-disabled title={R.submit_title}>{R.submit}</button>
+          <span className="self-center text-xs text-muted">{R.submit_note}</span>
         </div>
       </div>
 
@@ -249,15 +253,15 @@ export default function ReplicaPage() {
   );
 }
 
-function StatusMark({ vis }: { vis: Visual }) {
-  if (vis === 'verified') return <span className="chip chip-ok" role="img" aria-label="Verified">✓ Verified</span>;
-  if (vis === 'written') return <span className="chip">Checking…</span>;
-  if (vis === 'failed') return <span className="chip chip-warn">Didn&apos;t take</span>;
+function StatusMark({ vis, t }: { vis: Visual; t: Strings }) {
+  if (vis === 'verified') return <span className="chip chip-ok">{t.replica.verified}</span>;
+  if (vis === 'written') return <span className="chip">{t.replica.checking}</span>;
+  if (vis === 'failed') return <span className="chip chip-warn">{t.replica.failed}</span>;
   return null;
 }
 
 /** Real DOM controls. Read-only to the user here; this is a mirror, the user answers in the session panel. */
-function Control({ q, value }: { q: FormQuestion; value: string }) {
+function Control({ q, value, t }: { q: FormQuestion; value: string; t: Strings }) {
   const id = `f-${q.id}`;
   if (q.support === 'unsupported') {
     return <input id={id} data-input type="file" disabled className="text-sm" />;
@@ -272,7 +276,7 @@ function Control({ q, value }: { q: FormQuestion; value: string }) {
     case 'dropdown':
       return (
         <select id={id} data-input disabled value={value} className="field-input">
-          <option value="">Choose</option>
+          <option value="">{t.replica.choose}</option>
           {q.options?.map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
       );

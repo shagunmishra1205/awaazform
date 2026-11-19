@@ -12,6 +12,8 @@ import {
   type Candidate, type PageSize, type PdfLayout, type PdfPlan, type TextItem,
 } from '@/lib/pdf';
 import { discardSession, loadSession, PDF_KEY } from '@/lib/session-store';
+import { fmt, localizeMessage, Rich } from '@/lib/i18n';
+import { getFile, putFile } from '@/lib/secure-store';
 import { useSettings } from '@/lib/settings';
 import type { SurfaceHandle } from '@/lib/surface';
 
@@ -24,15 +26,16 @@ type Step =
   | { s: 'fill'; bytes: ArrayBuffer; plan: PdfPlan; filler: PdfFiller; session: Session; resumed: boolean };
 
 export default function PdfPage() {
-  const { settings } = useSettings();
+  const { settings, t } = useSettings();
+  const D = t.pdf;
   const [step, setStep] = useState<Step>({ s: 'upload' });
   const surfaceRef = useRef<SurfaceHandle | null>(null);
 
   // FR-22: resume a PDF session stored in this browser.
   useEffect(() => {
     (async () => {
-      const stored = await db.files.get(FILE_ID);
-      const saved = loadSession(PDF_KEY);
+      const stored = await getFile(FILE_ID);
+      const saved = await loadSession(PDF_KEY);
       if (!stored || !saved) return;
       const plan = stored.plan as PdfPlan;
       const filler = await PdfFiller.create(stored.bytes, plan);
@@ -44,17 +47,17 @@ export default function PdfPage() {
     const filler = await PdfFiller.create(bytes, plan);
     const session = createSession({ id: crypto.randomUUID(), formTitle: plan.title, questions: plan.questions, language: settings.language });
     discardSession(PDF_KEY);
-    await db.files.put({ id: FILE_ID, name: plan.fileName, bytes, plan, createdAt: new Date().toISOString() });
+    await putFile({ id: FILE_ID, name: plan.fileName, bytes, plan, createdAt: new Date().toISOString() });
     setStep({ s: 'fill', bytes, plan, filler, session, resumed: false });
   };
 
   const onFile = async (file: File) => {
-    if (file.type && file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) return setStep({ s: 'upload', error: 'Please choose a PDF file.' });
-    if (file.size > MAX_PDF_BYTES) return setStep({ s: 'upload', error: 'This PDF is larger than 10 MB.' });
+    if (file.type && file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) return setStep({ s: 'upload', error: D.not_pdf });
+    if (file.size > MAX_PDF_BYTES) return setStep({ s: 'upload', error: localizeMessage(t, 'This PDF is larger than 10 MB.') });
     setStep({ s: 'reading', name: file.name });
     const bytes = await file.arrayBuffer();
     const a = await analyzePdf(bytes, file.name);
-    if (a.kind === 'unsupported') return setStep({ s: 'upload', error: a.reason });
+    if (a.kind === 'unsupported') return setStep({ s: 'upload', error: localizeMessage(t, a.reason) });
     if (a.kind === 'acroform') return startFill(bytes, a.plan);
 
     // Flat PDF: ask AI to find questions; fall back to a simple heuristic.
@@ -86,14 +89,14 @@ export default function PdfPage() {
         initial={step.session}
         storageKey={PDF_KEY}
         startImmediately={step.resumed}
-        sourceLabel={step.plan.kind === 'acroform' ? 'Fillable PDF' : 'Printed PDF · approximate placement'}
-        surfaceLabel="PDF"
+        sourceLabel={step.plan.kind === 'acroform' ? D.fillable : D.printed}
+        surfaceLabel={D.surface}
         surfaceRef={surfaceRef}
         surface={<PdfSurface handleRef={surfaceRef} bytes={step.bytes} plan={step.plan} filler={step.filler} />}
-        actions={<button type="button" className="btn" onClick={download}>Download PDF</button>}
+        actions={<button type="button" className="btn" onClick={download}>{D.download}</button>}
         intro={step.plan.kind === 'flat' ? (
           <p className="rounded-[var(--r-12)] px-3 py-2 text-sm" style={{ background: 'var(--amber-100)', color: 'var(--amber-700)' }}>
-            Printed PDF: answers are drawn at the boxes you placed, so check the downloaded file before you submit it. Answers in Hindi script can&apos;t be drawn yet.
+            {D.printed_note}
           </p>
         ) : undefined}
         onDiscard={async () => { discardSession(PDF_KEY); await db.files.delete(FILE_ID); setStep({ s: 'upload' }); }}
@@ -107,19 +110,18 @@ export default function PdfPage() {
       <div className="container-x py-8">
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
-            <p className="text-xs font-medium tracking-wide text-muted uppercase">Printed PDF · step 2 of 3</p>
-            <h1 className="text-[clamp(1.5rem,3vw,2rem)]">Check the questions and boxes</h1>
+            <p className="text-xs font-medium tracking-wide text-muted uppercase">{D.review_eyebrow}</p>
+            <h1 className="text-[clamp(1.5rem,3vw,2rem)]">{D.review_title}</h1>
             <p className="mt-1 max-w-2xl text-muted">
-              {step.via === 'ai'
-                ? `AI found ${step.candidates.length} places to fill in “${step.title}”. Fix anything that looks wrong; placement is approximate.`
-                : `Found ${step.candidates.length} likely questions in “${step.title}” using simple rules${step.aiError ? ` (AI unavailable: ${step.aiError})` : ''}. Please review them carefully.`}
+              {fmt(step.via === 'ai' ? D.review_ai : step.aiError ? D.review_rules_err : D.review_rules,
+                { n: step.candidates.length, title: step.title, error: localizeMessage(t, step.aiError) })}
             </p>
           </div>
           <div className="flex gap-2">
-            <button type="button" className="btn btn-ghost" onClick={() => setStep({ s: 'upload' })}>Choose another file</button>
+            <button type="button" className="btn btn-ghost" onClick={() => setStep({ s: 'upload' })}>{t.common.choose_another}</button>
             <button type="button" className="btn" disabled={included === 0}
               onClick={() => startFill(step.bytes, flatPlan(step.fileName, step.title, step.pages, step.candidates, step.boxes, step.items))}>
-              Start filling ({included}) →
+              {fmt(D.start, { n: included })}
             </button>
           </div>
         </div>
@@ -133,6 +135,8 @@ export default function PdfPage() {
 }
 
 function UploadView({ reading, error, onFile }: { reading: string | null; error?: string; onFile: (f: File) => void }) {
+  const { t } = useSettings();
+  const D = t.pdf;
   const [over, setOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const onDrop = (e: DragEvent) => {
@@ -144,9 +148,9 @@ function UploadView({ reading, error, onFile }: { reading: string | null; error?
   return (
     <div className="container-x max-w-3xl py-12 md:py-16">
       <Reveal className="text-center">
-        <p className="text-xs font-medium tracking-wide text-muted uppercase">PDF forms</p>
-        <h1 className="mt-2 text-[clamp(2rem,4vw,2.75rem)]">Fill a PDF by voice</h1>
-        <p className="mx-auto mt-3 max-w-lg text-muted">Your PDF stays in this browser. AwaazForm fills it, and you download it and submit it yourself.</p>
+        <p className="text-xs font-medium tracking-wide text-muted uppercase">{D.eyebrow}</p>
+        <h1 className="mt-2 text-[clamp(2rem,4vw,2.75rem)]"><Rich text={D.title} /></h1>
+        <p className="mx-auto mt-3 max-w-lg text-muted">{D.lead}</p>
       </Reveal>
 
       <Reveal delay={0.08}>
@@ -157,39 +161,35 @@ function UploadView({ reading, error, onFile }: { reading: string | null; error?
           {reading ? (
             <div className="grid justify-items-center gap-3" role="status">
               <span style={{ color: 'var(--accent)' }}><Wave bars={10} /></span>
-              <p className="font-medium">Reading “{reading}”…</p>
-              <p className="text-sm text-muted">Finding the questions. This takes a few seconds.</p>
+              <p className="font-medium">{fmt(D.reading, { name: reading })}</p>
+              <p className="text-sm text-muted">{D.reading_sub}</p>
             </div>
           ) : (
             <>
               <span aria-hidden className="grid h-14 w-14 place-items-center rounded-[var(--r-16)] text-2xl" style={{ background: 'var(--violet-100)', color: 'var(--accent-text)' }}>⇪</span>
               <div>
-                <p className="text-lg font-semibold">Drop a PDF here</p>
-                <p className="text-sm text-muted">or</p>
+                <p className="text-lg font-semibold">{D.drop}</p>
+                <p className="text-sm text-muted">{t.common.or}</p>
               </div>
-              <button type="button" className="btn btn-lg" onClick={() => inputRef.current?.click()}>Choose a PDF</button>
-              <input ref={inputRef} type="file" accept="application/pdf,.pdf" className="sr-only" aria-label="Choose a PDF" onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ''; }} />
-              <p className="text-xs text-muted">Up to 10 MB</p>
+              <button type="button" className="btn btn-lg" onClick={() => inputRef.current?.click()}>{D.choose}</button>
+              <input ref={inputRef} type="file" accept="application/pdf,.pdf" className="sr-only" aria-label={D.choose} onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ''; }} />
+              <p className="text-xs text-muted">{t.common.up_to_10mb}</p>
             </>
           )}
         </div>
       </Reveal>
 
-      {error && <p role="alert" className="mt-4 rounded-[var(--r-12)] p-4 text-sm font-medium" style={{ background: 'var(--amber-100)', color: 'var(--amber-700)' }}>{error}</p>}
+      {error && <p role="alert" className="mt-4 rounded-[var(--r-12)] p-4 text-sm font-medium" style={{ background: 'var(--amber-100)', color: 'var(--amber-700)' }}>{localizeMessage(t, error)}</p>}
 
       <ul className="mt-10 grid gap-4 md:grid-cols-3">
-        {[
-          ['Fillable PDFs', 'PDFs with form fields are filled directly, field by field.', 'chip-ok'],
-          ['Printed PDFs', 'You check where each answer goes; placement is approximate.', 'chip-warn'],
-          ['Not supported', 'Scanned pages, XFA forms and password-protected PDFs.', ''],
-        ].map(([t, b, c], i) => (
-          <Reveal as="li" key={t} delay={0.1 + i * 0.06} className="card grid content-start gap-2 p-5">
-            <span className={`chip w-fit ${c}`}>{t}</span>
+        {[[D.k1_t, D.k1_b, 'chip-ok'], [D.k2_t, D.k2_b, 'chip-warn'], [D.k3_t, D.k3_b, '']].map(([title, b, c], i) => (
+          <Reveal as="li" key={i} delay={0.1 + i * 0.06} className="card grid content-start gap-2 p-5">
+            <span className={`chip w-fit ${c}`}>{title}</span>
             <p className="text-sm text-muted">{b}</p>
           </Reveal>
         ))}
       </ul>
-      <p className="mt-6 text-center text-xs text-muted">For printed PDFs, the page text (not your answers) is sent to Groq to find the questions.</p>
+      <p className="mt-6 text-center text-xs text-muted">{D.groq_note}</p>
     </div>
   );
 }

@@ -42,6 +42,8 @@ export async function groqFetch(path: string, init: RequestInit): Promise<Respon
 }
 
 export function errorResponse(err: unknown): Response {
+  // Unexpected errors: log the message only (never request bodies, which can hold personal data).
+  if (!(err instanceof GroqError)) console.error('[api] unexpected error:', (err as Error)?.message ?? String(err));
   const status = err instanceof GroqError ? err.status : 500;
   const message = err instanceof GroqError ? err.message : 'Something went wrong';
   return Response.json({ error: message, fallback: 'typing' }, { status });

@@ -3,12 +3,11 @@
 import type { FieldType, PdfBox } from '@awaazform/core';
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import type { Candidate, PageSize, PdfLayout } from '@/lib/pdf';
+import { fmt } from '@/lib/i18n';
+import { useSettings } from '@/lib/settings';
 import { boxStyle, PdfPages } from './PdfPages';
 
-const TYPES: [FieldType, string][] = [
-  ['text', 'Text'], ['paragraph', 'Long text'], ['number', 'Number'], ['date', 'Date'], ['phone', 'Phone'],
-  ['email', 'Email'], ['yesno', 'Yes / No'], ['choice', 'Tick one'], ['multichoice', 'Tick many'],
-];
+const TYPES: FieldType[] = ['text', 'paragraph', 'number', 'date', 'phone', 'email', 'yesno', 'choice', 'multichoice'];
 
 type Drag = { id: string; option?: string; mode: 'move' | 'resize'; startX: number; startY: number; orig: PdfBox; scale: number };
 
@@ -17,6 +16,8 @@ export function BoxEditor({ bytes, pages, candidates, boxes, onChange, onBoxes }
   bytes: ArrayBuffer; pages: PageSize[]; candidates: Candidate[]; boxes: PdfLayout['boxes'];
   onChange: (c: Candidate[]) => void; onBoxes: (b: PdfLayout['boxes']) => void;
 }) {
+  const { t } = useSettings();
+  const D = t.pdf;
   const [selected, setSelected] = useState<string | null>(candidates[0]?.itemId ?? null);
   const drag = useRef<Drag | null>(null);
   const included = candidates.filter((c) => c.include).length;
@@ -66,7 +67,7 @@ export function BoxEditor({ bytes, pages, candidates, boxes, onChange, onBoxes }
   const addBox = () => {
     const id = `custom-${Date.now()}`;
     const p = pages[0]!;
-    onChange([...candidates, { itemId: id, label: 'New question', type: 'text', required: false, include: true }]);
+    onChange([...candidates, { itemId: id, label: D.new_question, type: 'text', required: false, include: true }]);
     onBoxes({ ...boxes, [id]: { page: 0, box: { x: p.width / 2 - 80, y: p.height / 2, w: 160, h: 16 } } });
     setSelected(id);
   };
@@ -75,10 +76,10 @@ export function BoxEditor({ bytes, pages, candidates, boxes, onChange, onBoxes }
     <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
       <section aria-labelledby="qs-h" className="card grid gap-4 p-5 lg:sticky lg:top-24">
         <div className="flex items-center justify-between gap-2">
-          <h2 id="qs-h" className="text-xl">Questions <span className="text-muted">({included})</span></h2>
-          <button type="button" className="btn btn-ghost" onClick={addBox}>+ Add a box</button>
+          <h2 id="qs-h" className="text-xl">{D.questions} <span className="text-muted">({included})</span></h2>
+          <button type="button" className="btn btn-ghost" onClick={addBox}>{D.add_box}</button>
         </div>
-        <p className="text-sm text-muted">Untick anything that isn&apos;t a question. Select one to see its box on the page. Drag it into place, or use the arrow keys (Shift to move faster, Alt to resize).</p>
+        <p className="text-sm text-muted">{D.editor_help}</p>
         <ol className="grid max-h-[56vh] gap-2 overflow-y-auto pr-1" style={{ scrollbarWidth: 'thin' }}>
           {candidates.map((c, i) => (
             <li key={c.itemId}>
@@ -86,20 +87,20 @@ export function BoxEditor({ bytes, pages, candidates, boxes, onChange, onBoxes }
                 style={{ borderColor: selected === c.itemId ? 'var(--violet-500)' : 'var(--border)', background: selected === c.itemId ? 'var(--violet-100)' : 'var(--surface)', opacity: c.include ? 1 : 0.55 }}
                 onFocusCapture={() => setSelected(c.itemId)} onClick={() => setSelected(c.itemId)}>
                 <div className="flex items-center gap-2">
-                  <input type="checkbox" className="h-5 w-5 flex-none" checked={c.include} onChange={(e) => update(c.itemId, { include: e.target.checked })} aria-label={`Include question ${i + 1}`} />
-                  <label className="sr-only" htmlFor={`lbl-${c.itemId}`}>Question {i + 1} label</label>
+                  <input type="checkbox" className="h-5 w-5 flex-none" checked={c.include} onChange={(e) => update(c.itemId, { include: e.target.checked })} aria-label={fmt(D.include_q, { n: i + 1 })} />
+                  <label className="sr-only" htmlFor={`lbl-${c.itemId}`}>{fmt(D.label_q, { n: i + 1 })}</label>
                   <input id={`lbl-${c.itemId}`} className="min-h-11 min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 font-medium hover:border-line focus:border-line" value={c.label} onChange={(e) => update(c.itemId, { label: e.target.value })} />
                 </div>
                 {selected === c.itemId && (
                   <div className="flex flex-wrap items-center gap-2 pl-7 text-sm">
                     <label className="flex items-center gap-1.5">
-                      <span className="text-muted">Type</span>
+                      <span className="text-muted">{D.type}</span>
                       <select className="min-h-11 rounded-lg border border-line bg-surface px-2" value={c.type} onChange={(e) => update(c.itemId, { type: e.target.value as FieldType })}>
-                        {TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                        {TYPES.map((v) => <option key={v} value={v}>{t.types[v]}</option>)}
                       </select>
                     </label>
-                    <label className="flex min-h-11 items-center gap-1.5"><input type="checkbox" className="h-4 w-4" checked={c.required} onChange={(e) => update(c.itemId, { required: e.target.checked })} /> Required</label>
-                    {c.options?.length ? <span className="text-xs text-muted">Options: {c.options.map((o) => o.text).join(' · ')}</span> : null}
+                    <label className="flex min-h-11 items-center gap-1.5"><input type="checkbox" className="h-4 w-4" checked={c.required} onChange={(e) => update(c.itemId, { required: e.target.checked })} /> {t.common.required}</label>
+                    {c.options?.length ? <span className="text-xs text-muted">{fmt(D.options, { list: c.options.map((o) => o.text).join(' · ') })}</span> : null}
                   </div>
                 )}
               </div>
@@ -108,7 +109,7 @@ export function BoxEditor({ bytes, pages, candidates, boxes, onChange, onBoxes }
         </ol>
       </section>
 
-      <section aria-label="Page preview with answer boxes" className="card max-h-[80vh] overflow-auto p-4" style={{ background: 'var(--bg-subtle)', scrollbarWidth: 'thin' }}
+      <section aria-label={D.preview} className="card max-h-[80vh] overflow-auto p-4" style={{ background: 'var(--bg-subtle)', scrollbarWidth: 'thin' }}
         onPointerMove={onPointerMove} onPointerUp={() => { drag.current = null; }}>
         <PdfPages bytes={bytes} pages={pages} overlay={(page, scale) =>
           candidates.filter((c) => c.include).map((c) => {
@@ -118,7 +119,7 @@ export function BoxEditor({ bytes, pages, candidates, boxes, onChange, onBoxes }
             const color = sel ? 'var(--violet-500)' : 'rgba(98,77,227,0.55)';
             return (
               <div key={c.itemId}>
-                <div role="button" tabIndex={0} aria-label={`Answer box for ${c.label}. Arrow keys move it; Alt plus arrows resize it.`}
+                <div role="button" tabIndex={0} aria-label={fmt(D.box_for, { label: c.label })}
                   className="absolute cursor-move rounded-[3px] outline-none" onKeyDown={(e) => onKey(e, c.itemId)}
                   onFocus={() => setSelected(c.itemId)} onPointerDown={(e) => onPointerDown(e, c.itemId, undefined, 'move', scale)}
                   style={{ ...boxStyle(b.box, pages[page]!, scale), border: `1.5px ${sel ? 'solid' : 'dashed'} ${color}`, background: sel ? 'rgba(98,77,227,0.14)' : 'rgba(98,77,227,0.06)', zIndex: sel ? 2 : 1 }}>
@@ -127,7 +128,7 @@ export function BoxEditor({ bytes, pages, candidates, boxes, onChange, onBoxes }
                     onPointerDown={(e) => onPointerDown(e, c.itemId, undefined, 'resize', scale)} />
                 </div>
                 {b.optionBoxes && Object.entries(b.optionBoxes).map(([opt, ob]) => (
-                  <div key={opt} role="button" tabIndex={0} aria-label={`Tick box for ${opt} (${c.label})`}
+                  <div key={opt} role="button" tabIndex={0} aria-label={fmt(D.tick_for, { option: opt, label: c.label })}
                     className="absolute cursor-move rounded-[2px] outline-none" onKeyDown={(e) => onKey(e, c.itemId, opt)}
                     onPointerDown={(e) => onPointerDown(e, c.itemId, opt, 'move', scale)}
                     style={{ ...boxStyle(ob, pages[page]!, scale), border: `1.5px solid ${color}`, background: 'rgba(198,58,248,0.12)', zIndex: 3 }} />

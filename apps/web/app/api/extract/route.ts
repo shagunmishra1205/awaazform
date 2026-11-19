@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { config, errorResponse, groqFetch } from '@/lib/groq';
 import { rateLimit, tooMany } from '@/lib/rate-limit';
+import { guard, preflight, withCors } from '@/lib/guard';
 
 export const runtime = 'nodejs';
 
@@ -37,7 +38,7 @@ Rules:
   E.g. Gender: Male / Female / Third Gender -> one "choice"; a list of proof documents -> one "choice".
 - Keep labels short (under 12 words). Preserve the form's order. Output JSON only.`;
 
-export async function POST(req: Request) {
+async function handlePost(req: Request): Promise<Response> {
   if (!rateLimit(req, 'extract', 10)) return tooMany();
   if (!config.chatModel) return Response.json({ error: 'AI is not configured' }, { status: 503 });
   try {
@@ -79,3 +80,12 @@ export async function POST(req: Request) {
     return errorResponse(err);
   }
 }
+
+/** Same-origin pages and the AwaazForm extension only (lib/guard.ts). */
+export async function POST(req: Request) {
+  const g = guard(req);
+  if (!g.ok) return g.response;
+  return withCors(await handlePost(req), g);
+}
+
+export const OPTIONS = preflight;

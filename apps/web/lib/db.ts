@@ -8,18 +8,25 @@ import Dexie, { type EntityTable } from 'dexie';
 export interface StoredPdf {
   id: string;
   name: string;
+  /** Encrypted with the device key (lib/secure-store.ts); see putFile/getFile. */
   bytes: ArrayBuffer;
+  iv?: Uint8Array;
   plan: unknown;
   createdAt: string;
 }
 
+/** A per-device AES key that can be used but never read out (non-extractable CryptoKey). */
+interface Meta { id: string; key: CryptoKey }
+
 class AwaazDB extends Dexie {
   profiles!: EntityTable<Profile, 'id'>;
   files!: EntityTable<StoredPdf, 'id'>;
+  meta!: EntityTable<Meta, 'id'>;
   constructor() {
     super('awaazform');
     this.version(1).stores({ profiles: 'id, label, createdAt' });
     this.version(2).stores({ profiles: 'id, label, createdAt', files: 'id, createdAt' });
+    this.version(3).stores({ profiles: 'id, label, createdAt', files: 'id, createdAt', meta: 'id' });
   }
 }
 
@@ -76,4 +83,5 @@ export async function forgetProfileValues(profileId: string) {
 export async function forgetAll() {
   await db.profiles.clear();
   await db.files.clear();
+  await db.meta.clear(); // a new device key is made next time, so anything left over can't be read
 }

@@ -3,10 +3,12 @@
 import type { Session } from '@awaazform/core';
 import { useEffect, useRef, type RefObject } from 'react';
 import { ReplicaBridge } from '@/lib/replica-bridge';
+import { useSettings } from '@/lib/settings';
 import type { SurfaceHandle } from '@/lib/surface';
 
 /** The replica iframe (D2) as a session surface. */
 export function ReplicaSurface({ handleRef }: { handleRef: RefObject<SurfaceHandle | null> }) {
+  const { t } = useSettings();
   const frameRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
@@ -42,5 +44,5 @@ export function ReplicaSurface({ handleRef }: { handleRef: RefObject<SurfaceHand
     };
   }, [handleRef]);
 
-  return <iframe ref={frameRef} src="/replica" title="Replica of the form being filled" className="block h-[min(76vh,760px)] w-full border-0" />;
+  return <iframe ref={frameRef} src="/replica" title={t.replica.label} className="block h-[min(76vh,760px)] w-full border-0" />;
 }

@@ -1,25 +1,26 @@
 'use client';
 
 import {
-  canSave, parseVoiceCommand, SessionController, suggestCanonicalKey, ToolRunner,
-  type CanonicalKey, type FieldWriter, type FormQuestion, type Profile, type Session, type ToolHost,
+  canSave, commandWords, createShield, parseVoiceCommand, SessionController, suggestCanonicalKey, ToolRunner, validateAnswer,
+  type CanonicalKey, type FieldWriter, type FormQuestion, type Language, type Profile, type Session, type ToolHost,
 } from '@awaazform/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { AnimatePresence, motion } from 'motion/react';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Bolu } from '@/components/Bolu';
 import { Dialog } from '@/components/Dialog';
 import { EASE, Wave } from '@/components/Motion';
 import { applyEvent, Timeline, type TimelineCard } from '@/components/Timeline';
 import { AiUnavailable, assistantTurn, explainQuestion, fallbackExplanation, type ChatMsg } from '@/lib/assistant';
 import { db, ensureDefaultProfile, saveValue } from '@/lib/db';
-import { strings as i18n } from '@/lib/i18n';
+import { fmt, LANGUAGE_META, localizeMessage, Rich, type Strings } from '@/lib/i18n';
 import { LiveListener } from '@/lib/live';
 import { saveSession } from '@/lib/session-store';
 import { useSettings } from '@/lib/settings';
 import type { SurfaceHandle } from '@/lib/surface';
-import { isUnlocked, onVaultChange, readValues, unlock } from '@/lib/vault';
-import { isSpeaking, speak, speakSentences, startRecording, stopSpeaking, transcribe, VoiceError, voiceInputSupported } from '@/lib/voice';
+import { hasPasskey, isUnlocked, onVaultChange, readValues, unlock, unlockWithPasskey } from '@/lib/vault';
+import { isSpeaking, speak, voiceAvailable, speakSentences, startRecording, stopSpeaking, transcribe, VoiceError, voiceInputSupported } from '@/lib/voice';
 
 type Offer =
   | { kind: 'use'; key: CanonicalKey; value: string; resolve?: (v: string | null) => void }
@@ -27,13 +28,21 @@ type Offer =
 
 type Busy = null | 'transcribing' | 'thinking' | 'filling';
 type LiveState = 'off' | 'listening' | 'hearing' | 'thinking' | 'speaking';
+type Turn = { who: 'you' | 'ai'; text: string; id: number };
+
+const OPTION_TYPES: FormQuestion['type'][] = ['choice', 'dropdown', 'scale', 'yesno', 'checkbox', 'multichoice'];
+const isMulti = (q: FormQuestion) => q.type === 'checkbox' || q.type === 'multichoice';
+/** Options to show and read out; yes/no questions without their own options get Yes / No. */
+const optionsOf = (q: FormQuestion) => (q.options?.length ? q.options : q.type === 'yesno' ? ['Yes', 'No'] : []);
 
 const LIVE_CONSENT = 'awaazform.liveConsent';
-const keyLabel = (k: CanonicalKey) => k.replace(/_/g, ' ');
+const keyLabel = (t: Strings, k: CanonicalKey) => t.keys[k] ?? k.replace(/_/g, ' ');
+const optionsIntro = (t: Strings, opts: string[]) =>
+  opts.length > 8 ? fmt(t.session.options_many, { n: opts.length }) : fmt(t.session.options_intro, { list: opts.map((o, i) => `${i + 1}, ${o}`).join('; ') });
 
-export function displayValue(q: FormQuestion, v: string, lang: 'en' | 'hi'): string {
+export function displayValue(q: FormQuestion, v: string, lang: Language): string {
   if (q.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
-    return new Date(`${v}T00:00:00`).toLocaleDateString(lang === 'hi' ? 'hi-IN' : 'en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+    return new Date(`${v}T00:00:00`).toLocaleDateString(LANGUAGE_META[lang]?.locale ?? 'en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
   }
   return v;
 }
@@ -76,6 +85,11 @@ export function SessionWorkspace(props: WorkspaceProps) {
   const [level, setLevel] = useState(0);
   const [liveDialog, setLiveDialog] = useState(false);
   const [unlockDialog, setUnlockDialog] = useState(false);
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const turnId = useRef(0);
+  const addTurn = useCallback((who: Turn['who'], text: string) => {
+    setTurns((ts) => [...ts.slice(-7), { who, text, id: ++turnId.current }]);
+  }, []);
   const [, setVaultTick] = useState(0);
 
   const ctlRef = useRef<SessionController | null>(null);
@@ -83,6 +97,8 @@ export function SessionWorkspace(props: WorkspaceProps) {
   const recRef = useRef<Awaited<ReturnType<typeof startRecording>> | null>(null);
   const liveRef = useRef<LiveListener | null>(null);
   const historyRef = useRef<ChatMsg[]>([]);
+  /** One privacy shield per session, so a value keeps its placeholder across turns. */
+  const shieldRef = useRef(createShield());
   /** Pending auto-advance; cancelled by any manual navigation so it can't yank the user away. */
   const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Set when the user starts talking over AwaazForm, so the rest of a reply is dropped. */
@@ -106,6 +122,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
     if (show) setBubble(text);
     if (!latest.current.readAloud && latest.current.live === 'off') return;
     if (latest.current.live !== 'off') {
+      addTurn('ai', text);
       setLive('speaking');
       bargedIn.current = false;
       liveRef.current?.setBoost(2.5);
@@ -115,7 +132,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
       return;
     }
     await speak(text, voiceOpts());
-  }, []);
+  }, [addTurn]);
 
   const savedValue = useCallback(async (key: CanonicalKey): Promise<string | null> => {
     const p = latest.current.profile;
@@ -136,8 +153,8 @@ export function SessionWorkspace(props: WorkspaceProps) {
 
     const host: ToolHost = {
       ask: async (_q, text) => void (await say(text, true)),
-      readBack: async (q, v) => void (await say(`${displayValue(q, v, latest.current.settings.language)}. ${i18n[latest.current.settings.language].is_this_right}`)),
-      explain: async (q) => fallbackExplanation(q),
+      readBack: async (q, v) => void (await say(`${displayValue(q, v, latest.current.settings.language)}. ${latest.current.t.session.is_this_right}`)),
+      explain: async (q) => fallbackExplanation(q, latest.current.t),
       highlight: async (q) => surfaceRef.current?.focus(q),
       requestProfileUse: async (key) => {
         const v = await savedValue(key);
@@ -154,12 +171,12 @@ export function SessionWorkspace(props: WorkspaceProps) {
     runnerRef.current = new ToolRunner(ctl, host);
 
     const offEvent = ctl.onEvent((e) => {
-      setCards((c) => applyEvent(c, e, ctl.session.questions));
+      setCards((c) => applyEvent(c, e, ctl.session.questions, latest.current.t));
       surfaceRef.current?.onEvent(e);
     });
     const offState = ctl.onState((s) => {
       setSession(s);
-      saveSession(s, storageKey);
+      void saveSession(s, storageKey);
     });
     surfaceRef.current?.sync(ctl.session, reduceMotion);
     if (props.jumpTo !== undefined) ctl.goto(props.jumpTo);
@@ -175,6 +192,14 @@ export function SessionWorkspace(props: WorkspaceProps) {
   }, []);
 
   useEffect(() => surfaceRef.current?.setReduceMotion(reduceMotion), [reduceMotion, surfaceRef]);
+
+  // Say so once if this device can't read the chosen language aloud; everything is still on screen.
+  useEffect(() => {
+    if (!started || typeof speechSynthesis === 'undefined') return;
+    const check = () => { if (!voiceAvailable(lang)) setNotice(fmt(t.session.no_voice_lang, { language: LANGUAGE_META[lang].native })); };
+    const timer = setTimeout(check, 800); // voices load asynchronously
+    return () => clearTimeout(timer);
+  }, [started, lang, t]);
 
   const ctl = ctlRef.current;
   const q = session.questions[session.currentIndex];
@@ -195,9 +220,15 @@ export function SessionWorkspace(props: WorkspaceProps) {
     const cq = c.session.questions[c.session.currentIndex]!;
     const a = c.session.answers[cq.id]!;
     const tt = latest.current.t;
-    const parts = [cq.label, cq.required ? '' : `(${tt.optional})`];
-    if (cq.options?.length && cq.type !== 'yesno') parts.push(`${cq.options.join(', ')}.`);
-    if (cq.support === 'unsupported') parts.push(tt.not_supported);
+    const parts = [cq.label, cq.required ? '' : `(${tt.common.optional})`];
+    // An answer already proposed (e.g. given earlier in one breath with others) is read back, not asked again.
+    if (a.status === 'proposed' && a.normalized) {
+      parts.push(`${displayValue(cq, a.normalized, latest.current.settings.language)}. ${tt.session.is_this_right}`);
+      setTimeout(() => inputRef.current?.focus(), 60);
+      return void say(parts.filter(Boolean).join(' '));
+    }
+    if (cq.options?.length && cq.type !== 'yesno') parts.push(optionsIntro(tt, cq.options), isMulti(cq) ? tt.session.multi_hint : '');
+    if (cq.support === 'unsupported') parts.push(tt.session.not_supported);
     setTimeout(() => inputRef.current?.focus(), 60);
 
     const key = suggestCanonicalKey(cq);
@@ -206,7 +237,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
     if (key && saved) {
       c.emit({ type: 'profile.offered', key });
       setOffer({ kind: 'use', key, value: saved });
-      parts.push(tt.use_saved(keyLabel(key), displayValue(cq, saved, latest.current.settings.language)));
+      parts.push(fmt(tt.session.use_saved, { key: keyLabel(tt, key), value: displayValue(cq, saved, latest.current.settings.language) }));
     }
     void say(parts.filter(Boolean).join(' '));
   }, [say, savedValue]);
@@ -221,22 +252,30 @@ export function SessionWorkspace(props: WorkspaceProps) {
     if (!c) return;
     const i = c.session.currentIndex;
     if (advanceTimer.current) clearTimeout(advanceTimer.current);
-    if (i < c.session.questions.length - 1) {
+    // Next question that still needs the user: after this one first, then any skipped over earlier.
+    const qs = c.session.questions;
+    const open = (j: number) => {
+      const st = c.session.answers[qs[j]!.id]?.status;
+      return qs[j]!.support !== 'unsupported' && st !== 'verified' && st !== 'skipped' && st !== 'written';
+    };
+    const after = qs.findIndex((_, j) => j > i && open(j));
+    const target = after >= 0 ? after : qs.findIndex((_, j) => j < i && open(j));
+    if (target >= 0) {
       advanceTimer.current = setTimeout(() => {
         // Only advance if the user is still on the question they just finished.
-        if (ctlRef.current?.session.currentIndex === i) void present(i + 1);
+        if (ctlRef.current?.session.currentIndex === i) void present(target);
       }, reduceMotion ? 0 : 700);
     }
-    else void say(`${latest.current.t.readiness}. ${latest.current.t.never_submit}`, true);
+    else void say(`${latest.current.t.session.all_done} ${latest.current.t.session.never_submit}`, true);
   }, [present, reduceMotion, say]);
 
   // ---- Answering ----
   const readBackProposal = useCallback(async (question: FormQuestion) => {
     const a = ctlRef.current?.session.answers[question.id];
     if (a?.status === 'proposed' && a.normalized) {
-      await say(`${displayValue(question, a.normalized, latest.current.settings.language)}. ${latest.current.t.is_this_right}`);
+      await say(`${displayValue(question, a.normalized, latest.current.settings.language)}. ${latest.current.t.session.is_this_right}`);
     } else if (a?.status === 'invalid' && a.error) {
-      await say(a.error);
+      await say(localizeMessage(latest.current.t, a.error));
     }
   }, [say]);
 
@@ -244,29 +283,47 @@ export function SessionWorkspace(props: WorkspaceProps) {
     const c = ctlRef.current, runner = runnerRef.current;
     const cq = c?.session.questions[c.session.currentIndex];
     if (!c || !runner || !cq || !raw.trim()) return;
-    if (cq.support === 'unsupported') return setNotice(latest.current.t.not_supported);
+    if (cq.support === 'unsupported') return setNotice(latest.current.t.session.not_supported);
     setOffer(null);
     setBubble(null);
 
-    if (source === 'spoken' && latest.current.aiOn) {
+    // Fast path: a short answer that clearly picks an option needs no AI round trip.
+    const short = raw.trim().split(/\s+/).length <= 4;
+    const quick = source === 'spoken' && short && OPTION_TYPES.includes(cq.type) && validateAnswer(cq, raw).ok;
+
+    // Typed answers are taken literally. The exception: a typed answer to an option question that matches
+    // no option ("I study in college") goes to the AI to map onto one, still with read-back and confirm.
+    const needsAi = source === 'spoken' ? !quick : OPTION_TYPES.includes(cq.type) && !validateAnswer(cq, raw).ok;
+    if (latest.current.aiOn && needsAi) {
       setBusy('thinking');
       // FR-43: a spoken holding line if the AI takes a while.
-      const hold = latest.current.live !== 'off' ? setTimeout(() => void speak(latest.current.settings.language === 'hi' ? 'एक पल' : 'One moment', voiceOpts()), 1500) : null;
+      const hold = latest.current.live !== 'off' ? setTimeout(() => void speak(latest.current.t.session.one_moment, voiceOpts()), 1500) : null;
+      const startIndex = c.session.currentIndex;
       try {
-        const { reply, history } = await assistantTurn(
-          { ctl: c, runner, profileLabel: latest.current.profile?.label ?? 'Me', language: latest.current.settings.language },
+        const { reply, history, proposed } = await assistantTurn(
+          { ctl: c, runner, profileLabel: latest.current.profile?.label ?? 'Me', language: latest.current.settings.language, shield: latest.current.settings.privacyShield ? shieldRef.current : undefined },
           historyRef.current, raw,
         );
         historyRef.current = history;
         if (hold) clearTimeout(hold);
         setBusy(null);
-        if (c.session.answers[cq.id]?.status === 'proposed') return void (await readBackProposal(cq));
+        const pending = proposed.filter((id) => c.session.answers[id]?.status === 'proposed');
+        const others = pending.filter((id) => id !== cq.id).length;
+        if (c.session.answers[cq.id]?.status === 'proposed') {
+          if (others) void say(fmt(latest.current.t.session.next_proposed, { n: others }), true);
+          return void (await readBackProposal(cq));
+        }
+        if (pending.length) {
+          // The answer was for another question (a correction, or several at once): go there to confirm it.
+          return void (await present(c.session.questions.findIndex((x) => x.id === pending[0])));
+        }
+        if (c.session.currentIndex !== startIndex) return void (await present(c.session.currentIndex));
         if (reply) return void (await say(reply, true));
       } catch (err) {
         if (hold) clearTimeout(hold);
         if (err instanceof AiUnavailable) {
           setAiOn(false);
-          setNotice(`${latest.current.t.ai_unavailable} (${err.message})`);
+          setNotice(`${latest.current.t.session.ai_unavailable} (${localizeMessage(latest.current.t, err.message)})`);
         }
       } finally {
         setBusy(null);
@@ -275,7 +332,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
     // Deterministic path: typed answers, or AI unavailable.
     c.propose(cq.id, raw, source);
     await readBackProposal(cq);
-  }, [readBackProposal, say]);
+  }, [present, readBackProposal, say]);
 
   const confirm = useCallback(async () => {
     const c = ctlRef.current;
@@ -285,14 +342,14 @@ export function SessionWorkspace(props: WorkspaceProps) {
     await c.confirm(cq.id);
     setBusy(null);
     const a = c.session.answers[cq.id];
-    if (a?.status !== 'verified') return void say(a?.error ?? "Didn't take. Retry or tell me", true);
+    if (a?.status !== 'verified') return void say(localizeMessage(latest.current.t, a?.error) || latest.current.t.session.didnt_take, true);
 
     const key = suggestCanonicalKey(cq);
     const p = latest.current.profile;
     const current = key ? await savedValue(key) : null;
     if (key && a.normalized && current !== a.normalized && canSave(key, cq.label) && p && isUnlocked(p)) {
       setOffer({ kind: 'remember', key, value: a.normalized, questionId: cq.id });
-      void say(latest.current.t.remember);
+      void say(latest.current.t.session.remember);
       return;
     }
     advance();
@@ -321,7 +378,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
         c.emit({ type: 'profile.saved', key: o.key });
         ok = true;
       } catch (err) {
-        setNotice((err as Error).message);
+        setNotice(localizeMessage(latest.current.t, (err as Error).message));
       }
     }
     o.resolve?.(ok);
@@ -337,7 +394,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
     setBusy('thinking');
     const text = latest.current.aiOn
       ? await explainQuestion({ ctl: c, runner, profileLabel: latest.current.profile?.label ?? 'Me', language: latest.current.settings.language }, cq)
-      : fallbackExplanation(cq);
+      : fallbackExplanation(cq, latest.current.t);
     setBusy(null);
     void say(text, true);
   }, [say]);
@@ -355,7 +412,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
       } catch (err) {
         setBusy(null);
         const e = err as VoiceError;
-        setNotice(e.kind === 'ai' ? `${t.ai_unavailable} (${e.message})` : e.message);
+        setNotice(e.kind === 'ai' ? `${t.session.ai_unavailable} (${localizeMessage(t, e.message)})` : localizeMessage(t, e.message));
       }
       return;
     }
@@ -366,7 +423,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
       setRecording(true);
       setNotice(null);
     } catch (err) {
-      setNotice(`${t.voice_unavailable} (${(err as Error).message})`);
+      setNotice(`${t.session.voice_unavailable} (${localizeMessage(t, (err as Error).message)})`);
     }
   };
 
@@ -376,6 +433,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
     const cq = c?.session.questions[c.session.currentIndex];
     if (!c || !cq) return;
     setInput(text);
+    addTurn('you', text);
     const cmd = parseVoiceCommand(text);
     const a = c.session.answers[cq.id];
     const o = offerRef.current;
@@ -383,7 +441,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
     // Spoken yes/no answers an open prompt first. The decision is made here in code, not by the model.
     if (o && (cmd === 'confirm' || cmd === 'reject')) return decideOffer(cmd === 'confirm');
     if (a?.status === 'proposed' && cmd === 'confirm') return confirm();
-    if (a?.status === 'proposed' && cmd === 'reject') { c.edit(cq.id); return void say(latest.current.settings.language === 'hi' ? 'ठीक है, फिर से बताइए।' : 'Okay, please say it again.', true); }
+    if (a?.status === 'proposed' && cmd === 'reject') { c.edit(cq.id); return void say(latest.current.t.session.say_again, true); }
     if (a?.status === 'confirmed' && a.error && cmd === 'confirm') return c.retry(cq.id);
     switch (cmd) {
       case 'repeat': return a?.status === 'proposed' ? readBackProposal(cq) : present(c.session.currentIndex);
@@ -396,11 +454,11 @@ export function SessionWorkspace(props: WorkspaceProps) {
     // A plain "yes"/"no" to a yes/no question is an answer, not a confirmation.
     return submit(text, 'spoken');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [advance, confirm, decideOffer, explain, present, readBackProposal, say, submit]);
+  }, [addTurn, advance, confirm, decideOffer, explain, present, readBackProposal, say, submit]);
 
   const startLive = async () => {
-    if (!aiOn) return setNotice(t.ai_unavailable);
-    if (!voiceInputSupported()) return setNotice(t.voice_unavailable);
+    if (!aiOn) return setNotice(t.session.ai_unavailable);
+    if (!voiceInputSupported()) return setNotice(t.session.voice_unavailable);
     stopSpeaking();
     const listener = new LiveListener({
       onSpeechStart: () => {
@@ -418,7 +476,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
           await handleLiveRef.current(text);
         } catch (err) {
           const e = err as VoiceError;
-          if (e.kind === 'ai') { setNotice(`${t.ai_unavailable} (${e.message})`); stopLive(); return; }
+          if (e.kind === 'ai') { setNotice(`${t.session.ai_unavailable} (${localizeMessage(latest.current.t, e.message)})`); stopLive(); return; }
         } finally {
           listener.setPaused(false);
           setLive((s) => (s === 'off' ? 'off' : 'listening'));
@@ -429,7 +487,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
     try {
       await listener.start();
     } catch {
-      return setNotice(t.voice_unavailable);
+      return setNotice(t.session.voice_unavailable);
     }
     liveRef.current = listener;
     setLive('listening');
@@ -478,6 +536,8 @@ export function SessionWorkspace(props: WorkspaceProps) {
   };
 
   const pct = counts.fillable ? Math.round((counts.verified / counts.fillable) * 100) : 0;
+  /** The answer box is showing (not a read-back, offer, or finished answer). */
+  const answering = !!q && !!answer && q.support !== 'unsupported' && !offer && answer.status !== 'proposed' && answer.status !== 'verified' && !(answer.status === 'confirmed' && answer.error);
 
   return (
     <div className="container-x py-6">
@@ -491,32 +551,32 @@ export function SessionWorkspace(props: WorkspaceProps) {
           <div className="flex flex-wrap items-center gap-2">
             {/* FR-37: whose details these are, always visible */}
             <label className="flex items-center gap-2 rounded-[var(--r-12)] border border-line bg-surface py-1 pr-1 pl-3 text-sm">
-              <span className="text-muted">{t.filling_for}</span>
+              <span className="text-muted">{t.session.filling_for}</span>
               <select className="min-h-11 rounded-lg bg-transparent px-2 font-semibold" value={session.profileId} disabled={started}
                 onChange={(e) => ctl?.setProfile(e.target.value)} aria-describedby="owner-hint">
                 {profiles.map((p) => <option key={p.id} value={p.id}>{p.label}{p.encrypted ? ' 🔒' : ''}</option>)}
               </select>
             </label>
-            <span id="owner-hint" className="sr-only">{started ? 'The profile cannot be changed after the session starts.' : ''}</span>
+            <span id="owner-hint" className="sr-only">{started ? t.session.owner_locked : ''}</span>
             {locked && (
-              <button type="button" className="btn btn-ghost" onClick={() => setUnlockDialog(true)}>🔒 Unlock saved details</button>
+              <button type="button" className="btn btn-ghost" onClick={() => setUnlockDialog(true)}>{t.session.unlock_saved}</button>
             )}
-            <button type="button" className="btn-quiet" aria-pressed={readAloud} onClick={() => { setReadAloud(!readAloud); if (readAloud) stopSpeaking(); }} title="Read aloud">
-              <SpeakerIcon muted={!readAloud} /> <span className="hidden lg:inline">Read aloud</span>
+            <button type="button" className="btn-quiet" aria-pressed={readAloud} onClick={() => { setReadAloud(!readAloud); if (readAloud) stopSpeaking(); }} title={t.session.read_aloud}>
+              <SpeakerIcon muted={!readAloud} /> <span className="hidden lg:inline">{t.session.read_aloud}</span>
             </button>
             <button type="button" className={live !== 'off' ? 'btn' : 'btn btn-ghost'} aria-pressed={live !== 'off'} onClick={toggleLive}>
               {live !== 'off' ? <Wave bars={4} /> : <span aria-hidden className="h-2 w-2 rounded-full" style={{ background: 'var(--red-600)' }} />}
-              {t.live_mode}{live !== 'off' ? ': on' : ''}
+              {t.live.mode}{live !== 'off' ? ': on' : ''}
             </button>
             {typeof props.actions === 'function' ? props.actions(session) : props.actions}
             <details className="menu">
-              <summary className="btn-quiet" aria-label="More options">•••</summary>
+              <summary className="btn-quiet" aria-label={t.session.more}>•••</summary>
               <div className="menu-panel">
-                <Link href="/report" className="btn-quiet">{t.readiness}</Link>
-                <Link href="/profiles" className="btn-quiet">Manage profiles</Link>
+                <Link href="/report" className="btn-quiet">{t.session.readiness}</Link>
+                <Link href="/profiles" className="btn-quiet">{t.session.manage_profiles}</Link>
                 <button type="button" className="btn-quiet" style={{ color: 'var(--red-600)' }}
-                  onClick={() => window.confirm('Discard this session? Answers in this browser will be cleared. Saved profile details are kept.') && props.onDiscard()}>
-                  {t.discard}
+                  onClick={() => window.confirm(t.session.discard_confirm) && props.onDiscard()}>
+                  {t.session.discard}
                 </button>
               </div>
             </details>
@@ -526,16 +586,16 @@ export function SessionWorkspace(props: WorkspaceProps) {
         {/* Progress + stepper (replaces the long “still needed” list) */}
         <div className="grid gap-3">
           <div className="flex items-center gap-3 text-sm">
-            <div className="progress flex-1" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Answers verified"><i style={{ width: `${pct}%` }} /></div>
-            <span className="font-medium whitespace-nowrap">{counts.verified} / {counts.fillable} verified</span>
+            <div className="progress flex-1" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={t.session.answers_verified}><i style={{ width: `${pct}%` }} /></div>
+            <span className="font-medium whitespace-nowrap">{fmt(t.session.verified_of, { n: counts.verified, total: counts.fillable })}</span>
           </div>
           {started && (
-            <nav aria-label="Questions">
+            <nav aria-label={t.session.questions_nav}>
               <ol className="flex flex-wrap gap-3">
                 {session.questions.map((x, i) => (
                   <li key={x.id}>
                     <button type="button" className="step-dot" data-state={stepState(x)} aria-current={i === session.currentIndex ? 'step' : undefined}
-                      aria-label={`Question ${i + 1}: ${x.label}. ${stepState(x) === 'todo' ? (x.required ? 'required, not answered' : 'not answered') : stepState(x)}`}
+                      aria-label={fmt(t.session.step_label, { n: i + 1, label: x.label, state: stepState(x) === 'todo' ? (x.required ? t.session.st_todo_req : t.session.st_todo) : t.session[`st_${stepState(x)}` as 'st_verified'] })}
                       title={x.label} onClick={() => void present(i)}>
                       {stepState(x) === 'verified' ? '✓' : i + 1}
                     </button>
@@ -550,22 +610,22 @@ export function SessionWorkspace(props: WorkspaceProps) {
       {notice && (
         <div role="alert" className="mb-4 flex items-start justify-between gap-3 rounded-[var(--r-12)] border px-4 py-3 text-sm" style={{ borderColor: 'var(--amber-700)', background: 'var(--amber-100)', color: 'var(--amber-700)' }}>
           <span>{notice}</span>
-          <button type="button" className="btn-quiet !min-h-0 !p-0 underline" onClick={() => setNotice(null)}>Dismiss</button>
+          <button type="button" className="btn-quiet !min-h-0 !p-0 underline" onClick={() => setNotice(null)}>{t.common.dismiss}</button>
         </div>
       )}
 
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
         {/* ---- Conversation ---- */}
-        <div className="grid gap-4 lg:sticky lg:top-24">
+        <div className="grid min-w-0 gap-4 lg:sticky lg:top-24">
           {!started ? (
             <ScanSummary counts={counts} questions={session.questions} profileLabel={profile?.label ?? 'Me'} onStart={start} intro={props.intro} />
           ) : q && answer ? (
             <section aria-labelledby="q-label" className="card grid gap-5 p-6 md:p-7">
               <div className="flex items-center justify-between gap-2 text-sm text-muted">
-                <span>{t.question_of(session.currentIndex + 1, session.questions.length)}</span>
+                <span>{fmt(t.session.question_of, { n: session.currentIndex + 1, total: session.questions.length })}</span>
                 <span className="flex gap-1.5">
-                  <span className={`chip ${q.required ? 'chip-accent' : ''}`}>{q.required ? t.required : t.optional}</span>
-                  {q.support !== 'supported' && <span className="chip chip-warn">{q.support === 'unsupported' ? 'Fill yourself' : 'Check yourself'}</span>}
+                  <span className={`chip ${q.required ? 'chip-accent' : ''}`}>{q.required ? t.common.required : t.common.optional}</span>
+                  {q.support !== 'supported' && <span className="chip chip-warn">{q.support === 'unsupported' ? t.session.fill_yourself : t.session.check_yourself}</span>}
                 </span>
               </div>
 
@@ -573,8 +633,8 @@ export function SessionWorkspace(props: WorkspaceProps) {
                 <motion.div key={q.id} initial={reduceMotion ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? undefined : { opacity: 0, y: -8 }} transition={{ duration: 0.3, ease: EASE }} className="grid gap-2">
                   <h2 id="q-label" className="text-[1.75rem] leading-tight">{q.label}</h2>
                   {q.helpText && <p className="text-muted">{q.helpText}</p>}
-                  {q.options && q.type !== 'yesno' && (
-                    <ul className="mt-1 flex flex-wrap gap-1.5" aria-label="Options">
+                  {q.options && q.type !== 'yesno' && !answering && (
+                    <ul className="mt-1 flex flex-wrap gap-1.5" aria-label={t.session.options}>
                       {q.options.map((o) => <li key={o} className="chip !py-1 !text-sm">{o}</li>)}
                     </ul>
                   )}
@@ -583,7 +643,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
 
               {q.support === 'unsupported' ? (
                 <p className="rounded-[var(--r-12)] p-4 text-sm" style={{ background: 'var(--amber-100)', color: 'var(--amber-700)' }}>
-                  {t.not_supported} {q.supportReason}
+                  {t.session.not_supported} {localizeMessage(t, q.supportReason)}
                 </p>
               ) : offer ? (
                 <OfferCard offer={offer} q={q} lang={lang} profileLabel={profile?.label ?? 'Me'} t={t} onDecide={decideOffer} reduceMotion={reduceMotion} />
@@ -592,51 +652,54 @@ export function SessionWorkspace(props: WorkspaceProps) {
                 <motion.div role="group" aria-labelledby="rb-h" initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
                   className="grid gap-4 rounded-[var(--r-16)] border-2 p-5" style={{ borderColor: 'var(--violet-300)', background: 'var(--violet-100)' }}>
                   <div>
-                    <p id="rb-h" className="text-sm font-medium" style={{ color: 'var(--accent-text)' }}>{t.is_this_right}</p>
+                    <p id="rb-h" className="text-sm font-medium" style={{ color: 'var(--accent-text)' }}>{t.session.is_this_right}</p>
                     <p className="mt-1 text-2xl font-semibold break-words" aria-live="polite">{displayValue(q, answer.normalized, lang)}</p>
                     {answer.translated && <p className="mt-1 text-xs text-muted">You said: “{answer.raw}”</p>}
-                    {answer.source === 'profile' && <p className="mt-1 text-xs text-muted">From your saved details</p>}
+                    {answer.source === 'profile' && <p className="mt-1 text-xs text-muted">{t.session.from_saved}</p>}
                   </div>
                   <div className="flex gap-2">
-                    <button type="button" className="btn btn-success btn-lg flex-1" onClick={confirm} disabled={busy === 'filling'}>✓ {t.confirm}</button>
-                    <button type="button" className="btn btn-ghost btn-lg" onClick={() => { ctl?.edit(q.id); setInput(answer.raw); setTimeout(() => inputRef.current?.focus(), 30); }}>{t.edit}</button>
+                    <button type="button" className="btn btn-success btn-lg flex-1" onClick={confirm} disabled={busy === 'filling'}>✓ {t.session.confirm}</button>
+                    <button type="button" className="btn btn-ghost btn-lg" onClick={() => { ctl?.edit(q.id); setInput(answer.raw); setTimeout(() => inputRef.current?.focus(), 30); }}>{t.common.edit}</button>
                   </div>
                 </motion.div>
               ) : answer.status === 'verified' ? (
                 <div className="flex items-center justify-between gap-3 rounded-[var(--r-16)] p-4" style={{ background: 'var(--green-100)', color: 'var(--green-600)' }}>
                   <span className="font-semibold break-words">✓ {displayValue(q, answer.normalized ?? '', lang)}</span>
-                  <button type="button" className="btn-quiet !text-current underline" onClick={() => ctl?.edit(q.id)}>{t.edit}</button>
+                  <button type="button" className="btn-quiet !text-current underline" onClick={() => ctl?.edit(q.id)}>{t.common.edit}</button>
                 </div>
               ) : answer.status === 'confirmed' && answer.error ? (
                 <div className="grid gap-3 rounded-[var(--r-16)] p-4 text-sm" style={{ background: 'var(--amber-100)', color: 'var(--amber-700)' }}>
-                  <span>{answer.error}</span>
+                  <span>{localizeMessage(t, answer.error)}</span>
                   <span className="flex gap-2">
-                    <button type="button" className="btn" onClick={() => void ctl?.retry(q.id)}>{t.retry}</button>
-                    <button type="button" className="btn btn-ghost" onClick={() => ctl?.edit(q.id)}>{t.edit}</button>
+                    <button type="button" className="btn" onClick={() => void ctl?.retry(q.id)}>{t.common.retry}</button>
+                    <button type="button" className="btn btn-ghost" onClick={() => ctl?.edit(q.id)}>{t.common.edit}</button>
                   </span>
                 </div>
               ) : (
                 <form className="grid gap-2" onSubmit={(e) => { e.preventDefault(); void submit(input, 'typed'); }}>
-                  <label htmlFor="answer" className="sr-only">{t.your_answer}</label>
+                  <label htmlFor="answer" className="sr-only">{t.session.your_answer}</label>
                   {live !== 'off' ? (
-                    <LivePanel state={live} level={level} lang={lang} />
+                    <LivePanel state={live} level={level} t={t} turns={turns} words={commandWords(lang)} />
                   ) : null}
+                  {OPTION_TYPES.includes(q.type) && optionsOf(q).length > 0 && (
+                    <OptionPicker key={q.id} q={q} t={t} disabled={!!busy} onPick={(v) => void submit(v, 'typed')} />
+                  )}
                   <div className="composer" data-invalid={answer.status === 'invalid'}>
-                    <input id="answer" ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} placeholder={live !== 'off' ? 'Or type here' : t.type_answer}
+                    <input id="answer" ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} placeholder={live !== 'off' ? t.session.or_type : t.session.type_answer}
                       autoComplete="off" maxLength={2000} aria-invalid={answer.status === 'invalid'} aria-describedby={answer.error ? 'answer-err' : undefined} />
                     {live === 'off' && (
-                      <MicButton recording={recording} disabled={!voiceInputSupported() || (!!busy && !recording)} onClick={toggleRecording} label={recording ? t.stop : t.speak} />
+                      <MicButton recording={recording} disabled={!voiceInputSupported() || (!!busy && !recording)} onClick={toggleRecording} label={recording ? t.session.stop : t.session.speak} />
                     )}
                     <button type="submit" className="grid h-11 w-11 flex-none place-items-center rounded-[var(--r-12)] disabled:opacity-40" style={{ background: 'var(--accent)', color: 'var(--on-accent)' }}
-                      disabled={!input.trim() || !!busy} aria-label={t.send} title={t.send}>
+                      disabled={!input.trim() || !!busy} aria-label={t.session.send} title={t.session.send}>
                       <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
                     </button>
                   </div>
-                  {answer.status === 'invalid' && answer.error && <p id="answer-err" className="text-sm font-medium" style={{ color: 'var(--red-600)' }}>{answer.error}</p>}
+                  {answer.status === 'invalid' && answer.error && <p id="answer-err" className="text-sm font-medium" style={{ color: 'var(--red-600)' }}>{localizeMessage(t, answer.error)}</p>}
                   <p className="min-h-5 text-sm text-muted" aria-live="polite">
-                    {recording ? <b style={{ color: 'var(--accent-text)' }}>{t.listening} Press the mic again when you finish.</b>
-                      : busy === 'transcribing' ? t.transcribing : busy === 'thinking' ? 'Thinking…' : busy === 'filling' ? 'Filling…'
-                      : live === 'off' ? 'Type, or press the mic and speak.' : ''}
+                    {recording ? <b style={{ color: 'var(--accent-text)' }}>{t.live.hearing} Press the mic again when you finish.</b>
+                      : busy === 'transcribing' ? t.session.transcribing : busy === 'thinking' ? t.session.thinking : busy === 'filling' ? t.session.filling
+                      : live === 'off' ? t.session.idle_hint : ''}
                   </p>
                 </form>
               )}
@@ -648,27 +711,27 @@ export function SessionWorkspace(props: WorkspaceProps) {
               )}
 
               {/* One quiet toolbar instead of a wall of buttons */}
-              <div role="toolbar" aria-label="Question controls" className="-mx-2 flex items-center justify-between gap-1 border-t border-line pt-3">
-                <button type="button" className="btn-quiet" onClick={() => void present(session.currentIndex - 1)} disabled={session.currentIndex === 0}>← {t.prev}</button>
+              <div role="toolbar" aria-label={t.session.controls} className="-mx-2 flex flex-wrap items-center justify-between gap-1 border-t border-line pt-3">
+                <button type="button" className="btn-quiet" onClick={() => void present(session.currentIndex - 1)} disabled={session.currentIndex === 0}>← {t.session.prev}</button>
                 <span className="flex gap-1">
-                  <button type="button" className="btn-quiet" aria-label={t.repeat} onClick={() => (answer.status === 'proposed' ? void readBackProposal(q) : void present(session.currentIndex))}>↻ {t.repeat_short}</button>
-                  <button type="button" className="btn-quiet" onClick={explain}>? {t.explain}</button>
+                  <button type="button" className="btn-quiet" aria-label={t.session.repeat} onClick={() => (answer.status === 'proposed' ? void readBackProposal(q) : void present(session.currentIndex))}>↻ {t.session.repeat_short}</button>
+                  <button type="button" className="btn-quiet" onClick={explain}>? {t.session.explain}</button>
                   {!q.required && answer.status !== 'verified' && answer.status !== 'skipped' && (
-                    <button type="button" className="btn-quiet" onClick={() => { ctl?.skip(q.id); advance(); }}>{t.skip_q}</button>
+                    <button type="button" className="btn-quiet" onClick={() => { ctl?.skip(q.id); advance(); }}>{t.session.skip}</button>
                   )}
                 </span>
-                <button type="button" className="btn-quiet" onClick={() => void present(session.currentIndex + 1)} disabled={session.currentIndex >= session.questions.length - 1}>{t.next} →</button>
+                <button type="button" className="btn-quiet" onClick={() => void present(session.currentIndex + 1)} disabled={session.currentIndex >= session.questions.length - 1}>{t.session.next} →</button>
               </div>
             </section>
           ) : null}
         </div>
 
         {/* ---- Form / Activity ---- */}
-        <section aria-label="Form and activity" className="grid gap-3">
-          <div role="tablist" aria-label="View" className="tabbar">
+        <section aria-label={t.session.form_and_activity} className="grid min-w-0 gap-3">
+          <div role="tablist" aria-label={t.session.view} className="tabbar">
             <button role="tab" id="tab-form" aria-controls="panel-form" aria-selected={tab === 'form'} onClick={() => setTab('form')}>{props.surfaceLabel}</button>
             <button role="tab" id="tab-activity" aria-controls="panel-activity" aria-selected={tab === 'activity'} onClick={() => setTab('activity')}>
-              Activity {cards.length > 0 && <span className="chip ml-1 !px-2 !py-0">{cards.length}</span>}
+              {t.session.activity} {cards.length > 0 && <span className="chip ms-1 !px-2 !py-0">{cards.length}</span>}
             </button>
           </div>
           {/* The surface stays mounted when hidden, so writes and verification keep working. */}
@@ -676,21 +739,21 @@ export function SessionWorkspace(props: WorkspaceProps) {
             {props.surface}
           </div>
           <div id="panel-activity" role="tabpanel" aria-labelledby="tab-activity" hidden={tab !== 'activity'}>
-            <Timeline cards={cards} title={t.timeline} />
+            <Timeline cards={cards} title={t.timeline.title} />
           </div>
-          <p className="px-1 text-xs text-muted">{t.never_submit}</p>
+          <p className="px-1 text-xs text-muted">{t.session.never_submit}</p>
         </section>
       </div>
 
       {/* Live Mode disclosure (§9.2) */}
-      <Dialog open={liveDialog} onClose={() => setLiveDialog(false)} title="Turn on Live Mode?"
+      <Dialog open={liveDialog} onClose={() => setLiveDialog(false)} title={t.live.dialog_title}
         footer={<>
-          <button type="button" className="btn btn-ghost" onClick={() => setLiveDialog(false)}>Not now</button>
-          <button type="button" className="btn" onClick={() => { localStorage.setItem(LIVE_CONSENT, 'yes'); setLiveDialog(false); void startLive(); }}>Turn on</button>
+          <button type="button" className="btn btn-ghost" onClick={() => setLiveDialog(false)}>{t.live.not_now}</button>
+          <button type="button" className="btn" onClick={() => { localStorage.setItem(LIVE_CONSENT, 'yes'); setLiveDialog(false); void startLive(); }}>{t.live.turn_on}</button>
         </>}>
-        <p>Live Mode listens all the time, so you can just talk: answer, say <b>“yes”</b> to confirm, <b>“no”</b> to change it, or <b>“next”</b>, <b>“repeat”</b>, <b>“explain”</b>.</p>
-        <p>It sends your voice to Groq to be transcribed, and your spoken messages and the current question to Groq to respond. Groq&apos;s retention rules apply. Audio is not stored by AwaazForm.</p>
-        <p>You can turn it off at any time. Headphones help it not hear itself.</p>
+        <p><Rich text={t.live.d1} params={commandWords(lang)} /></p>
+        <p>{t.live.d2}</p>
+        <p>{t.live.d3}</p>
       </Dialog>
 
       {profile && <UnlockDialog open={unlockDialog} onClose={() => setUnlockDialog(false)} profile={profile} />}
@@ -701,42 +764,91 @@ export function SessionWorkspace(props: WorkspaceProps) {
 // ---------------------------------------------------------------------------
 
 function OfferCard({ offer, q, lang, profileLabel, t, onDecide, reduceMotion }: {
-  offer: Offer; q: FormQuestion; lang: 'en' | 'hi'; profileLabel: string; t: (typeof i18n)['en']; onDecide: (yes: boolean) => void; reduceMotion: boolean;
+  offer: Offer; q: FormQuestion; lang: Language; profileLabel: string; t: Strings; onDecide: (yes: boolean) => void; reduceMotion: boolean;
 }) {
   return (
     <motion.div role="group" aria-labelledby="offer-h" initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
       className="grid gap-4 rounded-[var(--r-16)] border p-5" style={{ borderColor: 'var(--violet-300)', background: 'var(--violet-100)' }}>
       <div>
         <p className="text-xs font-medium tracking-wide uppercase" style={{ color: 'var(--accent-text)' }}>
-          {offer.kind === 'use' ? `Saved for ${profileLabel}` : 'Remember for next time?'}
+          {offer.kind === 'use' ? fmt(t.session.saved_for, { name: profileLabel }) : t.session.remember}
         </p>
         <p id="offer-h" className="mt-1 text-lg font-semibold break-words">
           {offer.kind === 'use'
-            ? t.use_saved(keyLabel(offer.key), displayValue(q, offer.value, lang))
-            : `Save “${displayValue(q, offer.value, lang)}” as ${profileLabel === 'Me' ? 'your' : `${profileLabel}'s`} ${keyLabel(offer.key)}?`}
+            ? fmt(t.session.use_saved, { key: keyLabel(t, offer.key), value: displayValue(q, offer.value, lang) })
+            : fmt(profileLabel === 'Me' ? t.session.save_as_me : t.session.save_as, { value: displayValue(q, offer.value, lang), name: profileLabel, key: keyLabel(t, offer.key) })}
         </p>
-        {offer.kind === 'remember' && <p className="mt-1 text-xs text-muted">Stored in this browser only. You can delete it any time.</p>}
+        {offer.kind === 'remember' && <p className="mt-1 text-xs text-muted">{t.session.stored_here}</p>}
       </div>
       <div className="flex gap-2">
-        <button type="button" className="btn btn-lg flex-1" onClick={() => onDecide(true)}>{t.yes}</button>
-        <button type="button" className="btn btn-ghost btn-lg flex-1" onClick={() => onDecide(false)}>{t.no}</button>
+        <button type="button" className="btn btn-lg flex-1" onClick={() => onDecide(true)}>{t.common.yes}</button>
+        <button type="button" className="btn btn-ghost btn-lg flex-1" onClick={() => onDecide(false)}>{t.common.no}</button>
       </div>
     </motion.div>
   );
 }
 
-function LivePanel({ state, level, lang }: { state: LiveState; level: number; lang: 'en' | 'hi' }) {
-  const label: Record<LiveState, string> = lang === 'hi'
-    ? { off: '', listening: 'सुन रहे हैं, बस बोलिए', hearing: 'सुन रहे हैं…', thinking: 'समझ रहे हैं…', speaking: 'बोल रहे हैं (बीच में बोल सकते हैं)' }
-    : { off: '', listening: 'Listening. Just speak.', hearing: 'Hearing you…', thinking: 'Working on it…', speaking: 'Speaking (you can interrupt)' };
+function LivePanel({ state, level, t, turns, words }: { state: LiveState; level: number; t: Strings; turns: Turn[]; words: Record<string, string> }) {
+  const label: Record<LiveState, string> = { off: '', listening: t.live.listening, hearing: t.live.hearing, thinking: t.live.thinking, speaking: t.live.speaking };
+  const logRef = useRef<HTMLOListElement>(null);
+  useEffect(() => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [turns]);
   return (
-    <div className="flex items-center gap-4 rounded-[var(--r-16)] p-4" style={{ background: 'var(--ink-950)', color: '#fff' }} aria-live="polite">
-      <span className="relative grid h-12 w-12 flex-none place-items-center rounded-full" style={{ background: 'var(--violet-500)' }}>
-        <span aria-hidden className="absolute inset-0 rounded-full" style={{ transform: `scale(${1 + level * 0.6})`, background: 'rgba(171,159,244,0.35)', transition: 'transform 90ms linear' }} />
-        <span className="relative"><Wave bars={4} active={state !== 'listening'} /></span>
-      </span>
-      <span className="text-sm font-medium">{label[state]}</span>
+    <div className="grid gap-3 rounded-[var(--r-16)] p-4" style={{ background: 'var(--ink-950)', color: 'var(--white)' }}>
+      <div className="flex items-center gap-4" aria-live="polite">
+        <span className="relative grid h-14 w-14 flex-none place-items-center rounded-full" style={{ background: 'var(--ink-700)' }}>
+          <Bolu size={48} head state={state === 'thinking' ? 'thinking' : state === 'speaking' ? 'speaking' : 'listening'} level={level} />
+        </span>
+        <span className="text-sm font-medium">{label[state]}</span>
+      </div>
+      {turns.length > 0 ? (
+        <ol ref={logRef} aria-label={t.session.conversation} className="grid max-h-48 gap-1.5 overflow-y-auto text-sm" style={{ scrollbarWidth: 'thin' }}>
+          {turns.map((x) => (
+            <li key={x.id} className={x.who === 'you' ? 'justify-self-end' : 'justify-self-start'}>
+              <span className={`live-turn ${x.who === 'you' ? 'live-turn-you' : 'live-turn-ai'}`}>
+                <span className="sr-only">{x.who === 'you' ? t.session.you : 'AwaazForm'}: </span>{x.text}
+              </span>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="live-tip text-xs">{fmt(t.live.tips, words)}</p>
+      )}
     </div>
+  );
+}
+
+/** Tap targets for option questions. One tap proposes a single choice; multi-select collects, then proposes. */
+function OptionPicker({ q, t, disabled, onPick }: { q: FormQuestion; t: Strings; disabled: boolean; onPick: (value: string) => void }) {
+  const options = optionsOf(q);
+  const multi = isMulti(q);
+  const [picked, setPicked] = useState<string[]>([]);
+  const label = (o: string) => (q.type === 'yesno' && !q.options?.length ? (o === 'Yes' ? t.common.yes : t.common.no) : o);
+  const numbered = options.length <= 9 && q.type !== 'yesno' && q.type !== 'scale';
+  return (
+    <fieldset className="grid gap-2" disabled={disabled}>
+      <legend className="mb-1 text-xs font-medium text-muted">{multi ? t.session.choose_many : t.session.choose_one}</legend>
+      <div className={`grid gap-2 ${q.type === 'scale' || q.type === 'yesno' ? 'grid-flow-col auto-cols-fr' : options.length > 4 ? 'sm:grid-cols-2' : ''}`}>
+        {options.map((o, i) => {
+          const on = picked.includes(o);
+          return (
+            <button key={o} type="button" className="option-btn" aria-pressed={multi ? on : undefined}
+              onClick={() => (multi ? setPicked((p) => (on ? p.filter((x) => x !== o) : [...p, o])) : onPick(o))}>
+              {numbered && <span aria-hidden className="option-num">{i + 1}</span>}
+              {multi && <span aria-hidden className="option-box">{on ? '✓' : ''}</span>}
+              <span className="min-w-0 break-words text-left">{label(o)}</span>
+            </button>
+          );
+        })}
+      </div>
+      {multi && (
+        <button type="button" className="btn w-fit" disabled={!picked.length} onClick={() => onPick(options.filter((o) => picked.includes(o)).join(', '))}>
+          {t.session.use_selected}{picked.length ? ` (${picked.length})` : ''}
+        </button>
+      )}
+    </fieldset>
   );
 }
 
@@ -745,14 +857,16 @@ function ScanSummary({ counts, questions, profileLabel, onStart, intro }: {
   questions: FormQuestion[]; profileLabel: string; onStart: () => void; intro?: ReactNode;
 }) {
   // FR-09: Compatibility Scanner
+  const { t } = useSettings();
+  const ss = t.session;
   return (
     <section aria-labelledby="scan-h" className="card grid gap-5 p-6 md:p-7">
       <div>
-        <h2 id="scan-h" className="text-2xl">Ready when you are</h2>
-        <p className="mt-1 text-muted">{counts.total} questions found. Here is what AwaazForm can fill.</p>
+        <h2 id="scan-h" className="text-2xl">{ss.ready_title}</h2>
+        <p className="mt-1 text-muted">{fmt(ss.ready_body, { n: counts.total })}</p>
       </div>
       <dl className="grid grid-cols-3 gap-2 text-center">
-        {([['Can fill', counts.supported, 'var(--green-600)'], ['Check yourself', counts.review, 'var(--amber-700)'], ['Fill yourself', counts.unsupported, 'var(--text-muted)']] as const).map(([l, n, c]) => (
+        {([[ss.can_fill, counts.supported, 'var(--green-600)'], [ss.check_yourself, counts.review, 'var(--amber-700)'], [ss.fill_yourself, counts.unsupported, 'var(--text-muted)']] as const).map(([l, n, c]) => (
           <div key={l} className="rounded-[var(--r-16)] border border-line bg-surface p-3">
             <dd className="font-display text-2xl font-semibold" style={{ color: c }}>{n}</dd>
             <dt className="text-xs text-muted">{l}</dt>
@@ -760,13 +874,13 @@ function ScanSummary({ counts, questions, profileLabel, onStart, intro }: {
         ))}
       </dl>
       <details className="text-sm">
-        <summary className="min-h-11 cursor-pointer py-2 font-medium">See all {counts.total} questions</summary>
+        <summary className="min-h-11 cursor-pointer py-2 font-medium">{fmt(ss.see_all, { n: counts.total })}</summary>
         <ol className="grid gap-1.5 pt-1">
           {questions.map((q, i) => (
             <li key={q.id} className="flex items-start justify-between gap-2">
-              <span>{i + 1}. {q.label}{q.required && <span aria-label="required"> *</span>}</span>
+              <span>{i + 1}. {q.label}{q.required && <span aria-label={t.common.required}> *</span>}</span>
               <span className={`chip flex-none ${q.support === 'supported' ? 'chip-ok' : q.support === 'unsupported' ? '' : 'chip-warn'}`}>
-                {q.support === 'supported' ? 'can fill' : q.support === 'unsupported' ? 'fill yourself' : 'check yourself'}
+                {q.support === 'supported' ? ss.can_fill_chip : q.support === 'unsupported' ? ss.fill_yourself_chip : ss.check_yourself_chip}
               </span>
             </li>
           ))}
@@ -774,29 +888,35 @@ function ScanSummary({ counts, questions, profileLabel, onStart, intro }: {
       </details>
       {intro}
       <div className="grid gap-2">
-        <button type="button" className="btn btn-lg" onClick={onStart}>Start, filling for {profileLabel}</button>
-        <p className="text-center text-xs text-muted">You can change who you are filling for at the top.</p>
+        <button type="button" className="btn btn-lg" onClick={onStart}>{fmt(ss.start, { name: profileLabel })}</button>
+        <p className="text-center text-xs text-muted">{ss.change_owner}</p>
       </div>
     </section>
   );
 }
 
 function UnlockDialog({ open, onClose, profile }: { open: boolean; onClose: () => void; profile: Profile }) {
+  const { t } = useSettings();
   const [pass, setPass] = useState('');
   const [error, setError] = useState<string | null>(null);
   const submit = async () => {
     if (await unlock(profile, pass)) { setPass(''); setError(null); onClose(); }
-    else setError('That passphrase is not right.');
+    else setError(t.profiles.wrong);
   };
   return (
-    <Dialog open={open} onClose={onClose} title={`Unlock ${profile.label}'s saved details`}
+    <Dialog open={open} onClose={onClose} title={fmt(t.session.unlock_title, { name: profile.label })}
       footer={<>
-        <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-        <button type="button" className="btn" onClick={submit} disabled={!pass}>Unlock</button>
+        <button type="button" className="btn btn-ghost" onClick={onClose}>{t.common.cancel}</button>
+        <button type="button" className="btn" onClick={submit} disabled={!pass}>{t.session.unlock}</button>
       </>}>
-      <p>Saved details stay locked until you enter the passphrase. They lock again when you reload the page.</p>
+      {hasPasskey(profile) && (
+        <button type="button" className="btn btn-lg w-full" onClick={async () => {
+          try { if (await unlockWithPasskey(profile)) { setError(null); onClose(); } else setError(t.profiles.passkey_failed); } catch { setError(t.profiles.passkey_failed); }
+        }}>{t.profiles.passkey_unlock}</button>
+      )}
+      <p>{t.session.unlock_body}</p>
       <label className="grid gap-1.5">
-        <span className="font-medium">Passphrase</span>
+        <span className="font-medium">{t.profiles.passphrase}</span>
         <input type="password" className="field-input" value={pass} onChange={(e) => setPass(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void submit()} autoComplete="current-password" aria-invalid={!!error} aria-describedby={error ? 'unlock-err' : undefined} />
       </label>
       {error && <p id="unlock-err" role="alert" className="font-medium" style={{ color: 'var(--red-600)' }}>{error}</p>}
