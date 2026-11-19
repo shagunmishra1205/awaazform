@@ -105,6 +105,8 @@ export function SessionWorkspace(props: WorkspaceProps) {
   const shieldRef = useRef(createShield());
   /** Pending auto-advance; cancelled by any manual navigation so it can't yank the user away. */
   const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** `advance` is defined after `present`, which needs it for questions it can't fill. */
+  const advanceRef = useRef<() => void>(() => {});
   /** Set when the user starts talking over AwaazForm, so the rest of a reply is dropped. */
   const bargedIn = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -234,7 +236,14 @@ export function SessionWorkspace(props: WorkspaceProps) {
       return void say(parts.filter(Boolean).join(' '));
     }
     if (cq.options?.length && cq.type !== 'yesno') parts.push(optionsIntro(tt, cq.options), isMulti(cq) ? tt.session.multi_hint : '');
-    if (cq.support === 'unsupported') parts.push(tt.session.not_supported);
+    if (cq.support === 'unsupported') {
+      parts.push(tt.session.not_supported, localizeMessage(tt, cq.supportReason));
+      // Live Mode never waits on a question AwaazForm can't fill (a file upload, say): it says so and moves on.
+      if (latest.current.live !== 'off') {
+        await say([...parts, tt.session.moving_on].filter(Boolean).join(' '));
+        return advanceRef.current();
+      }
+    }
     setTimeout(() => inputRef.current?.focus(), 60);
 
     const key = suggestCanonicalKey(cq);
@@ -321,6 +330,8 @@ export function SessionWorkspace(props: WorkspaceProps) {
     else void say(`${latest.current.t.session.all_done} ${latest.current.t.session.never_submit}`, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [present, reduceMotion, say, startReview]);
+
+  advanceRef.current = advance;
 
   // ---- Answering ----
   const readBackProposal = useCallback(async (question: FormQuestion) => {

@@ -3,7 +3,9 @@
 export type FieldType =
   | 'text' | 'paragraph' | 'number' | 'date' | 'time'
   | 'email' | 'phone' | 'yesno' | 'choice' | 'multichoice' | 'checkbox'
-  | 'dropdown' | 'scale';
+  | 'dropdown' | 'scale'
+  /** A file the user picks themselves (web pages with a plain file input, through the extension). */
+  | 'file';
 
 /** A rectangle in PDF user space (points, origin bottom-left), on a 0-based page. */
 export interface PdfBox { x: number; y: number; w: number; h: number }

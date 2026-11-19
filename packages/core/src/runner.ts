@@ -97,6 +97,8 @@ export class ToolRunner {
       case 'propose_fill': {
         const source = args.source as 'spoken' | 'typed' | 'profile';
         const value = String(args.value);
+        // Files are only ever chosen by the user, with the file picker. The model can't attach one.
+        if (q!.type === 'file') throw new Error('The user chooses files themselves with the Choose a file button.');
         if (source === 'profile' && !this.approvedProfileValues.has(value)) {
           throw new Error('Profile values can only be proposed after the user agrees via lookup_profile.');
         }

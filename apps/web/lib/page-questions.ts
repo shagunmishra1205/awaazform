@@ -25,6 +25,15 @@ export function toQuestions(r: ScanResult): FormQuestion[] {
       radio: x.options && isYesNo(x.options) ? 'yesno' : 'choice', checkbox: 'checkbox', select: 'dropdown', date: 'date', time: 'time',
       textarea: 'paragraph', number: 'number', email: 'email', tel: 'phone', yesno: 'yesno', unknown: 'unknown',
     };
+    // A plain file input on an ordinary page: the user picks the file in the widget and confirms it.
+    // (Google and Microsoft uploads need their own sign-in and Drive/OneDrive, so those stay manual.)
+    if (x.control === 'file' && r.platform === 'other') {
+      const { support, reason } = classifySupport(x.label, 'text');
+      return {
+        id: `e-${x.key}`, label: x.label.slice(0, 200), type: 'file' as const, required: x.required, support, supportReason: reason,
+        source: { kind: 'dom' as const, url: r.url, key: x.key, platform: r.platform },
+      };
+    }
     const c = (control[x.control] ?? guessFieldType(x.label)) as RawControl;
     const { support, reason } = classifySupport(x.label, c);
     const type: FieldType = c === 'unknown' || c === 'file' || c === 'password' || c === 'grid' || c === 'checkbox-grid' || c === 'signature' ? 'text' : c;

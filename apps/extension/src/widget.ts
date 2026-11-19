@@ -102,6 +102,32 @@ let picked: string[] = [];
 let elapsed = 0;
 let timer: ReturnType<typeof setInterval> | null = null;
 const turns: { who: 'you' | 'ai'; text: string }[] = [];
+/** Files the user picked for file questions, kept in memory only until they are attached. */
+const files = new Map<string, File>();
+const MAX_FILE = 20 * 1024 * 1024;
+
+function toBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+/** Opens the file picker for a file question; the pick is read back and attached only after a yes. */
+function chooseFile(q: FormQuestion) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.onchange = () => {
+    const f = input.files?.[0];
+    if (!f || !ctl) return;
+    if (f.size > MAX_FILE) { note = { text: t.widget.file_too_big, tone: 'warn' }; return render(); }
+    files.set(q.id, f);
+    addTurn('you', f.name);
+    ctl.propose(q.id, f.name, 'typed');
+    void readBack(q);
+  };
+  input.click();
+}
 /** Conversational: answers are noted as you talk and read back together before anything is filled. */
 let confirmMode: 'end' | 'each' = 'end';
 /** Let the user interrupt Bolu by talking (headphones). Off: on speakers he would hear himself. */
@@ -187,6 +213,14 @@ function render() {
   const opts = $('opts');
   opts.replaceChildren();
   const asking = q && (phase === 'live' || phase === 'paused') && q.support !== 'unsupported' && a?.status !== 'proposed';
+  if (asking && q.type === 'file') {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn';
+    b.textContent = `📎 ${t.widget.choose_file}`;
+    b.onclick = () => chooseFile(q);
+    opts.append(b);
+  }
   if (asking && OPTION_TYPES.includes(q.type)) {
     const list = q.options?.length ? q.options : q.type === 'yesno' ? ['Yes', 'No'] : [];
     list.forEach((o, i) => {
@@ -347,7 +381,12 @@ async function scanPage() {
 
 function startController(s: Session) {
   const writer: FieldWriter = {
-    write: async (q, v) => void (await toPage('write', { question: q, value: v })),
+    write: async (q, v) => {
+      if (q.type !== 'file') return void (await toPage('write', { question: q, value: v }));
+      const f = files.get(q.id);
+      if (!f) throw new Error('Please choose a file');
+      await toPage('write', { question: q, value: v, file: { name: f.name, type: f.type, data: toBase64(await f.arrayBuffer()) } });
+    },
     read: async (q) => (await toPage<string | null>('read', { question: q })) ?? null,
   };
   ctl = new SessionController(s, writer);
@@ -382,10 +421,17 @@ async function present(index: number) {
   if (a.status === 'proposed' && a.normalized) {
     parts.push(`${a.normalized}. ${t.session.is_this_right}`);
   } else if (q.support === 'unsupported') {
-    parts.push(t.widget.fill_yourself);
+    parts.push(t.widget.fill_yourself, localizeMessage(t, q.supportReason));
+  } else if (q.type === 'file') {
+    parts.push(t.widget.file_ask);
   } else if (q.options?.length && q.type !== 'yesno') {
     parts.push(q.options.length > 8 ? fmt(t.session.options_many, { n: q.options.length }) : fmt(t.session.options_intro, { list: q.options.map((o, i) => `${i + 1}, ${o}`).join('; ') }));
     if (isMulti(q)) parts.push(t.session.multi_hint);
+  }
+  if (q.support === 'unsupported' && phase === 'live') {
+    // Never wait on a question AwaazForm can't fill: say so and move on.
+    await say([...parts, t.session.moving_on].filter(Boolean).join(' '));
+    return advance();
   }
   await say(parts.filter(Boolean).join(' '));
 }
@@ -548,6 +594,8 @@ async function handleSpoken(text: string) {
     case 'explain': return say(fallbackExplanation(q, t));
     case 'stop': return endLive();
   }
+  // A file can only come from the user's own pick, never from speech.
+  if (q.type === 'file') return void (await say(t.widget.file_ask));
   return submit(text, 'spoken');
 }
 

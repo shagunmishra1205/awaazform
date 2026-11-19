@@ -93,7 +93,7 @@ export function fallbackExplanation(q: FormQuestion, t: Strings = en): string {
   const e = t.explain;
   const kind: Record<FormQuestion['type'], string> = {
     text: e.k_text, paragraph: e.k_paragraph, number: e.k_number, date: e.k_date, time: e.k_time, email: e.k_email,
-    phone: e.k_phone, yesno: e.k_yesno, choice: e.k_choice, multichoice: e.k_multi, checkbox: e.k_multi, dropdown: e.k_choice, scale: e.k_scale,
+    phone: e.k_phone, yesno: e.k_yesno, choice: e.k_choice, multichoice: e.k_multi, checkbox: e.k_multi, dropdown: e.k_choice, scale: e.k_scale, file: e.k_file,
   };
   return [
     fmt(e.asks, { label: q.label, kind: kind[q.type] }),

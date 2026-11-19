@@ -105,8 +105,15 @@
     for (const el of document.querySelectorAll('input, textarea, select')) {
       if (!visible(el) || el.disabled || el.readOnly) continue;
       const t = (el.type || '').toLowerCase();
-      if (['hidden', 'submit', 'button', 'reset', 'image', 'file', 'password', 'search'].includes(t)) continue;
+      if (['hidden', 'submit', 'button', 'reset', 'image', 'password', 'search'].includes(t)) continue;
       const key = `g-${++n}`;
+      if (t === 'file') {
+        // A plain file input: the user picks the file in the widget; we attach it after they confirm.
+        el.dataset.awaazKey = key;
+        const label = labelFor(el).replace(/\s*\*\s*$/, '') || 'File upload';
+        out.push({ key, label, required: el.required, control: 'file', accept: el.accept || '' });
+        continue;
+      }
       if (t === 'radio') {
         if (!el.name || seenRadio.has(el.name)) continue;
         seenRadio.add(el.name);
@@ -193,6 +200,18 @@
     setNativeValue(field, value);
   }
 
+  /** Attaches a file the user chose in the widget, the way a person picking it would. */
+  function attachFile(box, file) {
+    const input = box.matches('input[type="file"]') ? box : box.querySelector('input[type="file"]');
+    if (!input) throw new Error('No file field found for this question');
+    const bytes = Uint8Array.from(atob(file.data), (c) => c.charCodeAt(0));
+    const dt = new DataTransfer();
+    dt.items.add(new File([bytes], file.name, { type: file.type || 'application/octet-stream', lastModified: Date.now() }));
+    input.files = dt.files;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
   async function writeDom(box, q, value) {
     const want = q.type === 'checkbox' ? splitOptions(value, q.options || []) : [value];
     const radios = box.matches('input[type="radio"]')
@@ -247,6 +266,10 @@
   function read(q) {
     const box = container(q);
     if (!box) return null;
+    if (q.type === 'file') {
+      const input = box.matches('input[type="file"]') ? box : box.querySelector('input[type="file"]');
+      return input?.files?.[0]?.name ?? '';
+    }
     if (q.source.kind === 'google-form') {
       const radio = box.querySelector('[role="radio"][aria-checked="true"]');
       if (radio) return optionText(radio);
@@ -339,7 +362,12 @@
           case 'write': {
             const box = container(msg.question);
             if (!box) throw new Error('This question isn’t on the current page. Go to its page on the form (Next/Back), then try again.');
-            await (msg.question.source.kind === 'google-form' ? writeGoogle(box, msg.question, msg.value) : writeDom(box, msg.question, msg.value));
+            if (msg.question.type === 'file') {
+              if (!msg.file) throw new Error('No file was sent');
+              attachFile(box, msg.file);
+            } else {
+              await (msg.question.source.kind === 'google-form' ? writeGoogle(box, msg.question, msg.value) : writeDom(box, msg.question, msg.value));
+            }
             await sleep(120);
             return respond({ ok: true });
           }

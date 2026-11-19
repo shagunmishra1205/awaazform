@@ -72,6 +72,11 @@ export function validateAnswer(q: FormQuestion, raw: string): ValidationResult {
       const v = matchOption(input, opts);
       return v ? { ok: true, normalized: v } : fail(`Please choose one of: ${opts.join(', ')}`);
     }
+    case 'file': {
+      // The value is the name of a file the user picked; the bytes never pass through validation or the AI.
+      const name = input.replace(/[\\/]/g, '').slice(0, 255);
+      return name ? { ok: true, normalized: name } : fail('Please choose a file');
+    }
     case 'multichoice':
     case 'checkbox': {
       const opts = q.options ?? [];

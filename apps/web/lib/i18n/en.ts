@@ -305,6 +305,9 @@ export const en = {
     save: 'Save',
     language: 'Language',
     fill_yourself: 'Please fill this one yourself on the form.',
+    choose_file: 'Choose a file',
+    file_ask: 'Tap Choose a file to pick it. I’ll attach it after you say yes.',
+    file_too_big: 'That file is larger than 20 MB, so I can’t attach it. Please attach it on the page yourself.',
   },
 
   report: {
@@ -541,6 +544,7 @@ export const en = {
     filled_all: 'Done. I filled {n} answers. Please check the form and press Submit yourself.',
     filled_one: 'Done. I filled that answer. Please check the form and press Submit yourself.',
     filled_continue: 'Done, those are on the form. Let’s carry on.',
+    moving_on: 'Please do this one on the form itself; I’ll move on.',
     filled_some: 'I filled {n} answers. {failed} didn’t take; they’re marked on the form.',
     nothing_to_fill: 'There’s nothing to fill yet. Tell me your answers first.',
   },
@@ -630,6 +634,7 @@ export const en = {
     checkbox: 'Tick many',
     dropdown: 'List',
     scale: 'Scale',
+    file: 'File',
   },
 
   keys: {
@@ -661,6 +666,7 @@ export const en = {
     k_choice: 'one of the options',
     k_multi: 'one or more options',
     k_scale: 'a number on the scale',
+    k_file: 'a file to upload',
   },
 
   /**
@@ -678,6 +684,8 @@ export const en = {
     'I couldn\'t read that date. Try “12 March 2001” or 12/03/2001': 'I couldn’t read that date. Try “12 March 2001” or 12/03/2001',
     'I couldn\'t read that time. Try “10:30 am”': 'I couldn’t read that time. Try “10:30 am”',
     'Please answer yes or no': 'Please answer yes or no',
+    'Please choose a file': 'Please choose a file',
+    'The user chooses files themselves with the Choose a file button.': 'Files are chosen with the Choose a file button.',
     'AwaazForm does not fill this field. Please complete it yourself.': 'AwaazForm does not fill this field. Please complete it yourself.',
     'Passwords, payments, OTPs and verification codes are never filled': 'Passwords, payments, OTPs and verification codes are never filled',
     'File uploads must be done by hand': 'File uploads must be done by hand',

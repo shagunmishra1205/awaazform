@@ -66,14 +66,22 @@ try {
   await p.setContent(`<form><label for=n>Full name</label><input id=n>
     <fieldset><legend>Gender</legend><label><input type=radio name=g value=Male>Male</label><label><input type=radio name=g value=Female>Female</label></fieldset>
     <label>City <select><option value="">Choose</option><option>Pune</option><option>Mumbai</option></select></label>
-    <label>Password <input type=password></label><button>Submit</button></form>`);
+    <label>Password <input type=password></label><label>Upload resume <input type=file id=f></label><button>Submit</button></form>`);
   const gs = (await call(p, { type: 'scan' })).result;
-  assert.deepEqual(gs.questions.map((x) => [x.label, x.control]), [['Full name', 'text'], ['Gender', 'radio'], ['City Choose Pune Mumbai', 'select']].map(([l, c]) => [gs.questions.find((q) => q.control === c).label, c]));
+  assert.ok(['text', 'radio', 'select', 'file'].every((c) => gs.questions.some((q) => q.control === c)), 'text, radio, select and file found');
   assert.ok(!gs.questions.some((x) => /password/i.test(x.label)), 'password fields are never offered');
   const sel = gs.questions.find((x) => x.control === 'select');
   await call(p, { type: 'write', question: { id: 'x', label: sel.label, type: 'dropdown', options: sel.options, source: { kind: 'dom', key: sel.key } }, value: 'Pune' });
   assert.equal((await call(p, { type: 'read', question: { id: 'x', type: 'dropdown', source: { kind: 'dom', key: sel.key } } })).result, 'Pune');
-  console.log('generic page: OK');
+  // File inputs: found, attached from the widget's bytes, and read back by name.
+  const fileQ = gs.questions.find((x) => x.control === 'file');
+  assert.ok(fileQ && /resume/i.test(fileQ.label), 'file input found');
+  const fq = { id: 'f', label: fileQ.label, type: 'file', source: { kind: 'dom', key: fileQ.key } };
+  const w = await call(p, { type: 'write', question: fq, value: 'cv.pdf', file: { name: 'cv.pdf', type: 'application/pdf', data: Buffer.from('%PDF-1.4 test').toString('base64') } });
+  assert.equal(w.ok, true, `attached: ${w.error ?? ''}`);
+  assert.equal((await call(p, { type: 'read', question: fq })).result, 'cv.pdf');
+  assert.equal(await p.evaluate(() => document.getElementById('f').files[0].size), 13, 'the real bytes are attached');
+  console.log('generic page: OK (incl. file upload)');
   console.log('EXTENSION CONTENT E2E PASS');
 } catch (err) {
   console.error('EXTENSION CONTENT E2E FAIL:', err.message);
