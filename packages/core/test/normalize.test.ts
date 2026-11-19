@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  leadingYesNo, matchOption, matchOptions, normalizeDate, normalizeEmail, normalizeNumber, normalizePhone,
+  cleanSpokenAnswer, leadingYesNo, matchOption, matchOptions, normalizeDate, normalizeEmail, normalizeNumber, normalizePhone,
   normalizeTime, normalizeYesNo, toAsciiDigits,
 } from '../src/normalize';
 
@@ -98,5 +98,28 @@ describe('choosing options by voice', () => {
     expect(leadingYesNo('नाही')).toBe('No');
     expect(leadingYesNo('ji nahi')).toBe('No');
     expect(leadingYesNo('maybe')).toBeNull();
+  });
+});
+
+describe('cleanSpokenAnswer', () => {
+  it('takes the value out of a sentence', () => {
+    expect(cleanSpokenAnswer('text', 'My name is Ayush Shukla.')).toBe('Ayush Shukla');
+    expect(cleanSpokenAnswer('text', "I'm Ayush Shukla")).toBe('Ayush Shukla');
+    expect(cleanSpokenAnswer('text', 'मेरा नाम आयुष शुक्ला है')).toBe('आयुष शुक्ला');
+    expect(cleanSpokenAnswer('text', 'माझं नाव आयुष शुक्ला')).toBe('आयुष शुक्ला');
+    expect(cleanSpokenAnswer('text', 'Ayush Shukla')).toBe('Ayush Shukla');
+    expect(cleanSpokenAnswer('paragraph', 'I am happy with the teachers.')).toBe('I am happy with the teachers');
+  });
+  it('rebuilds spoken emails', () => {
+    expect(cleanSpokenAnswer('email', 'I use shukla at gmail.com.')).toBe('shukla@gmail.com');
+    expect(cleanSpokenAnswer('email', 'my email is ayush dot shukla at gmail dot com')).toBe('shukla@gmail.com'.replace('shukla', 'ayush.shukla'));
+    expect(cleanSpokenAnswer('email', 'a y u s h at the rate gmail dot com')).toBe('ayush@gmail.com');
+    expect(cleanSpokenAnswer('email', 'ayush underscore 99 at yahoo dot co dot in')).toBe('ayush_99@yahoo.co.in');
+    expect(cleanSpokenAnswer('email', 'मेरा ईमेल ayush एट gmail डॉट com है')).toBe('ayush@gmail.com');
+    expect(cleanSpokenAnswer('email', 'It is ayush@example.com')).toBe('ayush@example.com');
+  });
+  it('pulls numbers and phones out of sentences', () => {
+    expect(cleanSpokenAnswer('phone', 'my number is 98440 12345')).toBe('98440 12345');
+    expect(cleanSpokenAnswer('number', 'I am 32 years old')).toBe('32');
   });
 });

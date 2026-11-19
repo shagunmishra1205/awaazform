@@ -51,6 +51,9 @@ export default function SettingsPage() {
         <Choice legend={S.motion} value={settings.motion} onChange={(v) => update({ motion: v as Settings['motion'] })}
           options={[['system', S.follow], ['reduce', S.reduce]]} hint={S.motion_hint} />
 
+        <Choice legend={S.confirm_title} value={settings.confirmMode} onChange={(v) => update({ confirmMode: v as Settings['confirmMode'] })}
+          options={[['end', S.confirm_end], ['each', S.confirm_each]]} hint={S.confirm_hint} />
+
         <fieldset className="card grid gap-3 p-6">
           <legend className="px-1 text-lg font-semibold">{S.privacy}</legend>
           <label className="flex min-h-11 items-start gap-3">

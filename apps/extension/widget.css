@@ -127,3 +127,11 @@ button { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---- End-of-conversation summary ---- */
+.review { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; width: 100%; }
+.review li { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; padding: 8px 10px; border-radius: var(--r-12); background: var(--ink-900); border: 1px solid rgba(255,255,255,.08); }
+.rv-label { grid-column: 1; font-size: 11px; color: var(--ink-300); }
+.rv-value { grid-column: 1; font-weight: 600; overflow-wrap: anywhere; }
+.review .chip-btn { grid-column: 2; grid-row: 1 / span 2; }
+.opts > .btn.yes { width: 100%; margin-top: 4px; }

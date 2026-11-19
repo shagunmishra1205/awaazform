@@ -2,7 +2,7 @@
 import { normalizeYesNo } from './normalize';
 import type { FieldType, Language } from './types';
 
-export type VoiceCommand = 'confirm' | 'reject' | 'repeat' | 'next' | 'previous' | 'skip' | 'explain' | 'stop';
+export type VoiceCommand = 'confirm' | 'reject' | 'repeat' | 'next' | 'previous' | 'skip' | 'explain' | 'stop' | 'finish';
 
 // English, Hindi (Devanagari and romanised) and Marathi. Whole-utterance matches only.
 const COMMANDS: [VoiceCommand, RegExp][] = [
@@ -14,10 +14,12 @@ const COMMANDS: [VoiceCommand, RegExp][] = [
   ['skip', /^(skip|skip (it|this)|chhodo|chhod do|छोड़ो|छोड़ें|छोड़ दो|वगळा|सोडा|vagla)$/],
   ['explain', /^(explain|what does (this|that) mean\??|what is (this|that)\??|samjhao|samjhaiye|समझाओ|समझाइए|समझाएँ|मतलब\??|इसका मतलब क्या है\??|समजावून सांगा|म्हणजे काय\??|याचा अर्थ काय\??)$/],
   ['stop', /^(stop|stop listening|pause|ruko|bas|रुको|बस|थांबा|थांब|thamba)$/],
+  // Go to the summary now. Never submits: AwaazForm has no way to.
+  ['finish', /^(done|i'?m done|finish(ed)?|that'?s all|that is all|that'?s it|fill (it|them|everything|all)( in| now)?|review|ho gaya|bas itna|हो गया|बस इतना|पूरा हुआ|भर दो|झालं|झाले|संपलं|भरा)$/],
 ];
 
 // The other Indian languages, as whole phrases. The first word of each list is the one shown in hints.
-const PHRASES: Record<Exclude<Language, 'en' | 'hi' | 'mr'>, Record<VoiceCommand, string[]>> = {
+const PHRASES: Record<Exclude<Language, 'en' | 'hi' | 'mr'>, Partial<Record<VoiceCommand, string[]>>> = {
   bn: {
     confirm: ['হ্যাঁ', 'হাঁ', 'ঠিক আছে', 'ঠিক', 'সঠিক', 'হ্যাঁ ঠিক আছে'], reject: ['না', 'ভুল', 'বদলান', 'পাল্টান'],
     repeat: ['আবার', 'আবার বলুন', 'আরেকবার'], next: ['পরের', 'পরেরটা', 'পরবর্তী', 'এগিয়ে যান'], previous: ['আগের', 'আগেরটা', 'পিছনে'],
@@ -75,7 +77,7 @@ export function parseVoiceCommand(utterance: string): VoiceCommand | null {
   const v = utterance.normalize('NFC').toLowerCase().trim().replace(/[.!?,।۔؟]+$/u, '').replace(/^(please|kripya|कृपया|कृपा करून) /, '').replace(/[,،]/g, '').replace(/\s+/g, ' ').trim();
   for (const [cmd, re] of COMMANDS) if (re.test(v)) return cmd;
   for (const lang of Object.values(PHRASES)) {
-    for (const [cmd, list] of Object.entries(lang) as [VoiceCommand, string[]][]) if (list.includes(v)) return cmd;
+    for (const [cmd, list] of Object.entries(lang) as [VoiceCommand, string[]][]) if (list?.includes(v)) return cmd;
   }
   return null;
 }
@@ -86,7 +88,7 @@ export function commandWords(lang: Language): Record<'yes' | 'no' | 'next' | 're
   if (lang === 'mr') return { yes: 'हो', no: 'नाही', next: 'पुढे', repeat: 'पुन्हा', explain: 'समजावून सांगा' };
   if (lang === 'en') return { yes: 'yes', no: 'no', next: 'next', repeat: 'repeat', explain: 'explain' };
   const p = PHRASES[lang];
-  return { yes: p.confirm[0]!, no: p.reject[0]!, next: p.next[0]!, repeat: p.repeat[0]!, explain: p.explain[0]! };
+  return { yes: p.confirm![0]!, no: p.reject![0]!, next: p.next![0]!, repeat: p.repeat![0]!, explain: p.explain![0]! };
 }
 
 /** Yes/no answers to a yes/no question must not be mistaken for confirmation of a *proposal*. */

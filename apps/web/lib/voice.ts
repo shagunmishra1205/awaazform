@@ -17,7 +17,7 @@ export class VoiceError extends Error {
 }
 
 /** Push-to-talk recorder. Call `stop()` to get the transcript. Audio is never stored (§9.4). */
-export async function startRecording(language: Language): Promise<{ stop: () => Promise<string>; cancel: () => void }> {
+export async function startRecording(language: Language, hint?: string): Promise<{ stop: () => Promise<string>; cancel: () => void }> {
   if (!voiceInputSupported()) throw new VoiceError('Voice input is not supported in this browser', 'unsupported');
   let stream: MediaStream;
   try {
@@ -46,7 +46,7 @@ export async function startRecording(language: Language): Promise<{ stop: () => 
           chunks.length = 0;
           if (blob.size < 1000) return reject(new VoiceError("I didn't hear anything", 'empty'));
           try {
-            resolve(await transcribe(blob, language));
+            resolve(await transcribe(blob, language, hint));
           } catch (e) {
             reject(e);
           }
@@ -56,10 +56,15 @@ export async function startRecording(language: Language): Promise<{ stop: () => 
   };
 }
 
-export async function transcribe(audio: Blob, language: Language): Promise<string> {
+/**
+ * Speech-to-text. `hint` tells Whisper what it is listening for (the question, its options, an example
+ * format), which noticeably improves names, emails and option words. It holds no personal data.
+ */
+export async function transcribe(audio: Blob, language: Language, hint?: string): Promise<string> {
   const body = new FormData();
   body.set('audio', audio);
   body.set('language', language);
+  if (hint) body.set('prompt', hint.slice(0, 600));
   const res = await fetch(apiUrl('/api/stt'), { method: 'POST', body });
   const json = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
   if (!res.ok) throw new VoiceError(json.error ?? 'Transcription failed', 'ai');
@@ -158,4 +163,17 @@ export async function speakSentences(text: string, opts: { language: Language; r
     if (shouldStop()) return;
     await speak(s, opts);
   }
+}
+
+/** What Whisper should expect for a question: its wording, options, and the shape of the answer. */
+export function sttHint(q: { label: string; type: string; options?: string[] } | undefined): string | undefined {
+  if (!q) return undefined;
+  const shape: Record<string, string> = {
+    email: 'Email address, spoken like: ayush dot shukla at gmail dot com → ayush.shukla@gmail.com.',
+    phone: 'Phone number: 98440 12345.',
+    number: 'A number.',
+    date: 'A date, like 12 March 2001.',
+    text: /name/i.test(q.label) ? 'A person’s name, like Ayush Shukla, Priya Patil, Sunita Devi.' : '',
+  };
+  return [q.label, q.options?.length ? `Options: ${q.options.join(', ')}.` : '', shape[q.type] ?? '', 'Yes. No. Next. Repeat.'].filter(Boolean).join(' ');
 }

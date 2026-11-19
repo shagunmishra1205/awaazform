@@ -291,3 +291,69 @@ export function matchOptions(input: string, options: string[]): string[] | null 
   }
   return options.filter((o) => picked.has(o));
 }
+
+// ---- Pulling the value out of a spoken sentence ----------------------------------------------
+// People answer in sentences: "My name is Ayush Shukla", "I use ayush at gmail dot com",
+// "मेरा नाम आयुष है". The AI normally extracts the value; this is the deterministic fallback, and it
+// also repairs how speech-to-text writes emails. It only removes words around the answer; it never
+// invents or reorders anything.
+
+const LEAD_INS = [
+  /^(?:well|so|okay|ok|umm?|uh|hmm)[,\s]+/i,
+  /^(?:my|the)\s+(?:full\s+)?(?:name|email(?:\s+address|\s+id)?|e-mail|mail(?:\s+id)?|phone(?:\s+number)?|mobile(?:\s+number)?|number|answer|age|city|address|course|department|campus)\s+(?:is|would be|will be|'s)\s+/i,
+  /^(?:it\s+is|it's|its|this\s+is|that\s+is|that's|i\s+am|i'm|i\s+use|i\s+live\s+in|i\s+study|call\s+me|you\s+can\s+write|please\s+write|write|put)\s+/i,
+  /^(?:मेरा|मेरी|हमारा)\s+(?:पूरा\s+)?(?:नाम|ईमेल|ई-मेल|मेल|फ़ोन|फोन|मोबाइल|नंबर|उम्र|शहर|पता)(?:\s+(?:नंबर|आईडी))?\s+/u,
+  /^(?:माझं|माझे|माझा|माझी)\s+(?:पूर्ण\s+)?(?:नाव|ईमेल|फोन|मोबाईल|नंबर|वय|शहर|पत्ता)\s+/u,
+  /^(?:mera|meri)\s+(?:poora\s+)?(?:naam|email|phone|mobile|number)\s+/i,
+];
+const TAILS = [/\s+(?:है|हैं|हे|आहे|hai|aahe|ahe)$/u, /\s+(?:please|thank you|thanks)$/i];
+
+/** Joins spelled-out letters ("a y u s h" → "ayush"). */
+function joinSpelled(s: string): string {
+  return s.replace(/\b(?:[a-z0-9]\s+){2,}[a-z0-9]\b/gi, (m) => m.replace(/\s+/g, ''));
+}
+
+/** Finds an email in speech-to-text output, reading spoken symbols in English and Hindi. */
+export function extractEmail(input: string): string | null {
+  let v = ` ${toAsciiDigits(input.normalize('NFC')).toLowerCase()} `
+    .replace(/[“”"']/g, ' ')
+    .replace(/\s+(?:at the rate(?: of)?|at sign|at|एट द रेट|एट|ऍट|ॲट)\s+/gu, ' @ ')
+    .replace(/\s+(?:dot|period|point|डॉट|डोट)\s+/gu, ' . ')
+    .replace(/\s+(?:underscore|अंडरस्कोर)\s+/gu, ' _ ')
+    .replace(/\s+(?:dash|hyphen|minus|डैश)\s+/gu, ' - ');
+  v = joinSpelled(v).replace(/\s*([._-])\s*/g, '$1');
+  // Glue the pieces around @ and dots back together: "ayush shukla @ gmail . com" → "ayushshukla@gmail.com"
+  const at = v.indexOf('@');
+  if (at < 0) return null;
+  const left = v.slice(0, at).trim().split(/\s+/);
+  const local = (left.at(-1) ?? '').replace(/[^\w.+-]/g, '').replace(/^[._-]+/, '');
+  // If the words just before @ were spelled out as several short words, keep only the last word:
+  // "I use shukla @ gmail" → "shukla". Spelled letters were already joined above.
+  const right = v.slice(at + 1).trim().split(/\s+/)[0]!.replace(/[^\w.-]/g, '').replace(/\.+$/, '');
+  const email = `${local}@${right}`;
+  return /^[\w.+-]+@[\w-]+(\.[\w-]+)+$/.test(email) ? email : null;
+}
+
+/**
+ * The answer inside a spoken sentence, for short fields (text, email, phone, number, date, time).
+ * Long answers (paragraphs) and option questions are left to their own handling.
+ */
+export function cleanSpokenAnswer(type: string, raw: string): string {
+  let v = raw.normalize('NFC').trim().replace(/[.!?।]+$/u, '').trim();
+  if (type === 'paragraph' || !v) return v;
+  if (type === 'email') {
+    const direct = v.match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/);
+    return direct ? direct[0] : extractEmail(v) ?? v;
+  }
+  if (type === 'phone') {
+    const digits = joinSpelled(toAsciiDigits(v)).match(/\+?\d[\d\s-]{8,}\d/);
+    return digits ? digits[0] : v;
+  }
+  if (type === 'number') {
+    const n = toAsciiDigits(v).match(/-?\d+(?:[.,]\d+)?/);
+    return n ? n[0] : v;
+  }
+  for (let pass = 0; pass < 2; pass++) for (const re of LEAD_INS) v = v.replace(re, '');
+  for (const re of TAILS) v = v.replace(re, '');
+  return v.trim().replace(/^[,:-]\s*/, '') || raw.trim();
+}

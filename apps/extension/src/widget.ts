@@ -3,7 +3,7 @@
 // through the content script; the model can only propose, and only the Yes button or a spoken “yes”
 // (matched in code) confirms. Nothing is ever submitted.
 import {
-  commandWords, createSession, createShield, LANGUAGES, parseVoiceCommand, SessionController, ToolRunner, validateAnswer,
+  cleanSpokenAnswer, commandWords, createSession, createShield, LANGUAGES, parseVoiceCommand, SessionController, ToolRunner, validateAnswer,
   type FieldWriter, type FormQuestion, type Language, type Session, type ToolHost,
 } from '@awaazform/core';
 import { setApiBase } from '@/lib/api';
@@ -12,7 +12,7 @@ import { mountBolu, type BoluState } from '@/lib/bolu';
 import { en, fmt, LANGUAGE_META, localizeMessage, type Strings } from '@/lib/i18n/core';
 import { LiveListener } from '@/lib/live';
 import { formKey, toQuestions, type ScanResult } from '@/lib/page-questions';
-import { isSpeaking, speakSentences, stopSpeaking, transcribe, VoiceError, voiceInputSupported } from '@/lib/voice';
+import { isSpeaking, speakSentences, sttHint, stopSpeaking, transcribe, VoiceError, voiceInputSupported } from '@/lib/voice';
 
 declare const __AWAAZ_SERVER__: string;
 
@@ -102,6 +102,11 @@ let picked: string[] = [];
 let elapsed = 0;
 let timer: ReturnType<typeof setInterval> | null = null;
 const turns: { who: 'you' | 'ai'; text: string }[] = [];
+/** Conversational: answers are noted as you talk and read back together before anything is filled. */
+let confirmMode: 'end' | 'each' = 'end';
+let reviewing = false;
+const endMode = () => phase === 'live' && confirmMode === 'end';
+const proposedList = () => { const s = session(); return s ? s.questions.filter((q) => s.answers[q.id]?.status === 'proposed') : []; };
 
 const bolu = mountBolu($('bolu'), { reduceMotion });
 const avatar = mountBolu($('avatar'), { head: true, reduceMotion });
@@ -208,8 +213,37 @@ function render() {
   }
   opts.setAttribute('aria-label', t.session.options);
 
+  if (reviewing && s) {
+    $('q-meta').textContent = t.session.review_title;
+    $('q-label').textContent = t.session.review_hint;
+    opts.replaceChildren();
+    const list = document.createElement('ol');
+    list.className = 'review';
+    for (const x of proposedList()) {
+      const li = document.createElement('li');
+      const label = document.createElement('span');
+      label.className = 'rv-label';
+      label.textContent = x.label;
+      const value = document.createElement('span');
+      value.className = 'rv-value';
+      value.textContent = s.answers[x.id]!.normalized ?? '';
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'chip-btn';
+      edit.textContent = t.common.edit;
+      edit.onclick = () => { reviewing = false; void present(s.questions.indexOf(x)); };
+      li.append(label, value, edit);
+      list.append(li);
+    }
+    const fill = document.createElement('button');
+    fill.type = 'button';
+    fill.className = 'btn yes';
+    fill.textContent = `✓ ${fmt(t.session.fill_all, { n: proposedList().length })}`;
+    fill.onclick = () => void fillAll();
+    opts.append(list, fill);
+  }
   const rb = $('readback');
-  rb.hidden = !(q && a?.status === 'proposed' && a.normalized);
+  rb.hidden = reviewing || !(q && a?.status === 'proposed' && a.normalized);
   if (!rb.hidden) {
     $('rb-value').textContent = a!.normalized!;
     $('yes').textContent = `✓ ${t.widget.yes_fill}`;
@@ -358,7 +392,7 @@ function nextOpen(from: number): number {
   const s = session()!;
   const isOpen = (j: number) => {
     const st = s.answers[s.questions[j]!.id]?.status;
-    return s.questions[j]!.support !== 'unsupported' && st !== 'verified' && st !== 'skipped' && st !== 'written';
+    return s.questions[j]!.support !== 'unsupported' && st !== 'verified' && st !== 'skipped' && st !== 'written' && !(endMode() && st === 'proposed');
   };
   const after = s.questions.findIndex((_, j) => j > from && isOpen(j));
   return after >= 0 ? after : s.questions.findIndex((_, j) => j < from && isOpen(j));
@@ -369,6 +403,7 @@ async function advance() {
   if (!s) return;
   const target = nextOpen(s.currentIndex);
   if (target >= 0) return present(target);
+  if (endMode() && proposedList().length) return startReview();
   setBolu('happy');
   await say(`${t.session.all_done} ${t.session.never_submit}`);
 }
@@ -405,15 +440,51 @@ async function submit(raw: string, source: 'typed' | 'spoken') {
       if (err instanceof AiUnavailable) note = { text: `${t.session.ai_unavailable} (${localizeMessage(t, err.message)})`, tone: 'warn' };
     }
   }
-  c.propose(q.id, raw, source);
+  c.propose(q.id, OPTION_TYPES.includes(q.type) ? raw : cleanSpokenAnswer(q.type, raw), source);
   await readBack(q);
+}
+
+async function startReview() {
+  const s = session();
+  const list = proposedList();
+  if (!s || !list.length) return void (await say(t.session.nothing_to_fill));
+  reviewing = true;
+  setBolu('idle');
+  render();
+  const items = list.map((x) => `${x.label}: ${s.answers[x.id]!.normalized}`).join('. ');
+  await say(`${t.session.review_intro} ${items}. ${fmt(t.session.review_ask, commandWords(lang))}`);
+}
+
+/** One yes for the summary: every noted answer still goes through the confirm gate, one by one. */
+async function fillAll() {
+  const c = ctl;
+  if (!c) return;
+  const list = proposedList();
+  busy = true;
+  render();
+  let ok = 0;
+  for (const x of list) {
+    await c.confirm(x.id);
+    if (c.session.answers[x.id]?.status === 'verified') ok++;
+  }
+  busy = false;
+  reviewing = false;
+  setBolu('happy');
+  note = { text: t.widget.filled, tone: 'ok' };
+  render();
+  await say(ok === list.length ? fmt(t.session.filled_all, { n: ok }) : fmt(t.session.filled_some, { n: ok, failed: list.length - ok }));
 }
 
 async function readBack(q: FormQuestion) {
   const a = answerOf(q);
   setBolu('idle');
   render();
-  if (a?.status === 'proposed' && a.normalized) await say(`${a.normalized}. ${t.session.is_this_right}`);
+  const shown = (v: string) => v.replace(/[.!?।]+$/u, '');
+  if (a?.status === 'proposed' && a.normalized && endMode()) {
+    await say(fmt(t.session.got_it, { value: shown(a.normalized) }));
+    return advance();
+  }
+  if (a?.status === 'proposed' && a.normalized) await say(`${shown(a.normalized)}. ${t.session.is_this_right}`);
   else if (a?.status === 'invalid' && a.error) await say(localizeMessage(t, a.error));
 }
 
@@ -449,6 +520,14 @@ async function handleSpoken(text: string) {
   addTurn('you', text);
   const cmd = parseVoiceCommand(text);
   const a = answerOf(q);
+  if (reviewing) {
+    if (cmd === 'confirm') return fillAll();
+    if (cmd === 'reject') return void (await say(t.session.review_change));
+    if (cmd === 'finish' || cmd === 'repeat') return startReview();
+    if (cmd === 'stop') return endLive();
+    return submit(text, 'spoken');
+  }
+  if (cmd === 'finish') return startReview();
   if (a?.status === 'proposed' && cmd === 'confirm') return confirm();
   if (a?.status === 'proposed' && cmd === 'reject') return change();
   if (a?.status === 'confirmed' && a.error && cmd === 'confirm') return c.retry(q.id);
@@ -481,7 +560,7 @@ async function startLive() {
       setBolu('thinking');
       render();
       try {
-        await handleSpoken(await transcribe(blob, lang));
+        await handleSpoken(await transcribe(blob, lang, sttHint(current())));
       } catch (err) {
         const e = err as VoiceError;
         if (e.kind === 'ai') note = { text: `${t.session.ai_unavailable} (${localizeMessage(t, e.message)})`, tone: 'warn' };
@@ -528,7 +607,8 @@ function endLive() {
 // Wiring
 
 async function init() {
-  const stored = await chrome.storage.local.get(['server', 'language']).catch(() => ({} as Record<string, unknown>));
+  const stored = await chrome.storage.local.get(['server', 'language', 'confirmMode']).catch(() => ({} as Record<string, unknown>));
+  if (stored.confirmMode === 'each') confirmMode = 'each';
   if (typeof stored.server === 'string' && stored.server) server = stored.server;
   setApiBase(server);
   const nav = navigator.language.slice(0, 2) as Language;

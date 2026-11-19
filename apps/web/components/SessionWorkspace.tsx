@@ -1,7 +1,7 @@
 'use client';
 
 import {
-  canSave, commandWords, createShield, parseVoiceCommand, SessionController, suggestCanonicalKey, ToolRunner, validateAnswer,
+  canSave, cleanSpokenAnswer, commandWords, createShield, parseVoiceCommand, SessionController, suggestCanonicalKey, ToolRunner, validateAnswer,
   type CanonicalKey, type FieldWriter, type FormQuestion, type Language, type Profile, type Session, type ToolHost,
 } from '@awaazform/core';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -20,7 +20,7 @@ import { saveSession } from '@/lib/session-store';
 import { useSettings } from '@/lib/settings';
 import type { SurfaceHandle } from '@/lib/surface';
 import { hasPasskey, isUnlocked, onVaultChange, readValues, unlock, unlockWithPasskey } from '@/lib/vault';
-import { isSpeaking, speak, voiceAvailable, speakSentences, startRecording, stopSpeaking, transcribe, VoiceError, voiceInputSupported } from '@/lib/voice';
+import { isSpeaking, speak, sttHint, voiceAvailable, speakSentences, startRecording, stopSpeaking, transcribe, VoiceError, voiceInputSupported } from '@/lib/voice';
 
 type Offer =
   | { kind: 'use'; key: CanonicalKey; value: string; resolve?: (v: string | null) => void }
@@ -86,6 +86,10 @@ export function SessionWorkspace(props: WorkspaceProps) {
   const [liveDialog, setLiveDialog] = useState(false);
   const [unlockDialog, setUnlockDialog] = useState(false);
   const [turns, setTurns] = useState<Turn[]>([]);
+  /** Conversational mode: all proposed answers are read back together, then filled on one yes. */
+  const [reviewing, setReviewing] = useState(false);
+  const reviewingRef = useRef(false);
+  reviewingRef.current = reviewing;
   const turnId = useRef(0);
   const addTurn = useCallback((who: Turn['who'], text: string) => {
     setTurns((ts) => [...ts.slice(-7), { who, text, id: ++turnId.current }]);
@@ -247,6 +251,43 @@ export function SessionWorkspace(props: WorkspaceProps) {
     void present(ctlRef.current?.session.currentIndex ?? 0);
   };
 
+  /** Live Mode in conversational mode: answers are acknowledged and checked together at the end. */
+  const endMode = () => latest.current.live !== 'off' && latest.current.settings.confirmMode === 'end';
+  const proposedList = () => {
+    const c = ctlRef.current;
+    return c ? c.session.questions.filter((x) => c.session.answers[x.id]?.status === 'proposed') : [];
+  };
+
+  /** Reads back everything noted so far and asks for one yes. Nothing is filled until then. */
+  const startReview = useCallback(async () => {
+    const tt = latest.current.t, langNow = latest.current.settings.language;
+    const list = proposedList();
+    if (!list.length) return void say(tt.session.nothing_to_fill, true);
+    setReviewing(true);
+    const c = ctlRef.current!;
+    const items = list.map((x) => `${x.label}: ${displayValue(x, c.session.answers[x.id]!.normalized ?? '', langNow)}`).join('. ');
+    await say(`${tt.session.review_intro} ${items}. ${fmt(tt.session.review_ask, commandWords(langNow))}`, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [say]);
+
+  /** The user said yes to the summary (or pressed Fill all): confirm each noted answer through the gate. */
+  const fillAll = useCallback(async () => {
+    const c = ctlRef.current;
+    if (!c) return;
+    const list = proposedList();
+    setBusy('filling');
+    let ok = 0;
+    for (const x of list) {
+      await c.confirm(x.id);
+      if (c.session.answers[x.id]?.status === 'verified') ok++;
+    }
+    setBusy(null);
+    setReviewing(false);
+    const tt = latest.current.t;
+    await say(ok === list.length ? fmt(tt.session.filled_all, { n: ok }) : fmt(tt.session.filled_some, { n: ok, failed: list.length - ok }), true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [say]);
+
   const advance = useCallback(() => {
     const c = ctlRef.current;
     if (!c) return;
@@ -256,7 +297,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
     const qs = c.session.questions;
     const open = (j: number) => {
       const st = c.session.answers[qs[j]!.id]?.status;
-      return qs[j]!.support !== 'unsupported' && st !== 'verified' && st !== 'skipped' && st !== 'written';
+      return qs[j]!.support !== 'unsupported' && st !== 'verified' && st !== 'skipped' && st !== 'written' && !(endMode() && st === 'proposed');
     };
     const after = qs.findIndex((_, j) => j > i && open(j));
     const target = after >= 0 ? after : qs.findIndex((_, j) => j < i && open(j));
@@ -266,18 +307,27 @@ export function SessionWorkspace(props: WorkspaceProps) {
         if (ctlRef.current?.session.currentIndex === i) void present(target);
       }, reduceMotion ? 0 : 700);
     }
+    else if (endMode() && proposedList().length) void startReview();
     else void say(`${latest.current.t.session.all_done} ${latest.current.t.session.never_submit}`, true);
-  }, [present, reduceMotion, say]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [present, reduceMotion, say, startReview]);
 
   // ---- Answering ----
   const readBackProposal = useCallback(async (question: FormQuestion) => {
     const a = ctlRef.current?.session.answers[question.id];
+    const shown = (v: string) => displayValue(question, v, latest.current.settings.language).replace(/[.!?।]+$/u, '');
+    if (a?.status === 'proposed' && a.normalized && endMode()) {
+      // Conversational: a short acknowledgement and on to the next question; the check comes at the end.
+      await say(fmt(latest.current.t.session.got_it, { value: shown(a.normalized) }));
+      return advance();
+    }
     if (a?.status === 'proposed' && a.normalized) {
-      await say(`${displayValue(question, a.normalized, latest.current.settings.language)}. ${latest.current.t.session.is_this_right}`);
+      await say(`${shown(a.normalized)}. ${latest.current.t.session.is_this_right}`);
     } else if (a?.status === 'invalid' && a.error) {
       await say(localizeMessage(latest.current.t, a.error));
     }
-  }, [say]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [say, advance]);
 
   const submit = useCallback(async (raw: string, source: 'typed' | 'spoken') => {
     const c = ctlRef.current, runner = runnerRef.current;
@@ -329,8 +379,9 @@ export function SessionWorkspace(props: WorkspaceProps) {
         setBusy(null);
       }
     }
-    // Deterministic path: typed answers, or AI unavailable.
-    c.propose(cq.id, raw, source);
+    // Deterministic path: typed answers, or AI unavailable. Take the value out of a sentence
+    // ("My name is Ayush Shukla" → "Ayush Shukla"); option questions do their own matching.
+    c.propose(cq.id, OPTION_TYPES.includes(cq.type) ? raw : cleanSpokenAnswer(cq.type, raw), source);
     await readBackProposal(cq);
   }, [present, readBackProposal, say]);
 
@@ -418,7 +469,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
     }
     stopSpeaking();
     try {
-      recRef.current = await startRecording(lang);
+      recRef.current = await startRecording(lang, sttHint(q));
       if (q) ctl?.listening(q.id);
       setRecording(true);
       setNotice(null);
@@ -438,6 +489,15 @@ export function SessionWorkspace(props: WorkspaceProps) {
     const a = c.session.answers[cq.id];
     const o = offerRef.current;
 
+    // The end-of-form summary: “yes” fills everything, “no” asks what to change, anything else is a change.
+    if (reviewingRef.current) {
+      if (cmd === 'confirm') return fillAll();
+      if (cmd === 'reject') return void say(latest.current.t.session.review_change, true);
+      if (cmd === 'finish' || cmd === 'repeat') return startReview();
+      if (cmd === 'stop') return stopLive();
+      return submit(text, 'spoken');
+    }
+    if (cmd === 'finish') return startReview();
     // Spoken yes/no answers an open prompt first. The decision is made here in code, not by the model.
     if (o && (cmd === 'confirm' || cmd === 'reject')) return decideOffer(cmd === 'confirm');
     if (a?.status === 'proposed' && cmd === 'confirm') return confirm();
@@ -454,7 +514,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
     // A plain "yes"/"no" to a yes/no question is an answer, not a confirmation.
     return submit(text, 'spoken');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addTurn, advance, confirm, decideOffer, explain, present, readBackProposal, say, submit]);
+  }, [addTurn, advance, confirm, decideOffer, explain, fillAll, present, readBackProposal, say, startReview, submit]);
 
   const startLive = async () => {
     if (!aiOn) return setNotice(t.session.ai_unavailable);
@@ -472,7 +532,8 @@ export function SessionWorkspace(props: WorkspaceProps) {
         listener.setPaused(true);
         setLive('thinking');
         try {
-          const text = await transcribe(blob, latest.current.settings.language);
+          const c0 = ctlRef.current;
+          const text = await transcribe(blob, latest.current.settings.language, sttHint(c0?.session.questions[c0.session.currentIndex]));
           await handleLiveRef.current(text);
         } catch (err) {
           const e = err as VoiceError;
@@ -535,6 +596,7 @@ export function SessionWorkspace(props: WorkspaceProps) {
     return 'todo';
   };
 
+  const proposedCount = Object.values(session.answers).filter((a) => a.status === 'proposed').length;
   const pct = counts.fillable ? Math.round((counts.verified / counts.fillable) * 100) : 0;
   /** The answer box is showing (not a read-back, offer, or finished answer). */
   const answering = !!q && !!answer && q.support !== 'unsupported' && !offer && answer.status !== 'proposed' && answer.status !== 'verified' && !(answer.status === 'confirmed' && answer.error);
@@ -619,6 +681,33 @@ export function SessionWorkspace(props: WorkspaceProps) {
         <div className="grid min-w-0 gap-4 lg:sticky lg:top-24">
           {!started ? (
             <ScanSummary counts={counts} questions={session.questions} profileLabel={profile?.label ?? 'Me'} onStart={start} intro={props.intro} />
+          ) : reviewing ? (
+            <section aria-labelledby="review-h" className="card grid gap-5 p-6 md:p-7">
+              <div>
+                <h2 id="review-h" className="text-2xl">{t.session.review_title}</h2>
+                <p className="mt-1 text-sm text-muted">{t.session.review_hint}</p>
+              </div>
+              {live !== 'off' && <LivePanel state={live} level={level} t={t} turns={turns} words={commandWords(lang)} />}
+              <ol className="grid gap-2">
+                {session.questions.map((x, i) => {
+                  const a = session.answers[x.id];
+                  if (a?.status !== 'proposed') return null;
+                  return (
+                    <li key={x.id} className="flex items-center justify-between gap-3 rounded-[var(--r-12)] border border-line bg-surface p-3">
+                      <span className="min-w-0">
+                        <span className="block text-xs text-muted">{i + 1}. {x.label}</span>
+                        <span className="block font-semibold break-words">{displayValue(x, a.normalized ?? '', lang)}</span>
+                      </span>
+                      <button type="button" className="btn btn-ghost flex-none" onClick={() => { setReviewing(false); void present(i); }}>{t.common.edit}</button>
+                    </li>
+                  );
+                })}
+              </ol>
+              <button type="button" className="btn btn-success btn-lg" disabled={busy === 'filling'} onClick={() => void fillAll()}>
+                ✓ {fmt(t.session.fill_all, { n: Object.values(session.answers).filter((a) => a.status === 'proposed').length })}
+              </button>
+              {bubble && <div className="bubble" role="status"><span className="mb-1 block text-xs font-medium text-muted">AwaazForm</span>{bubble}</div>}
+            </section>
           ) : q && answer ? (
             <section aria-labelledby="q-label" className="card grid gap-5 p-6 md:p-7">
               <div className="flex items-center justify-between gap-2 text-sm text-muted">
@@ -711,6 +800,11 @@ export function SessionWorkspace(props: WorkspaceProps) {
               )}
 
               {/* One quiet toolbar instead of a wall of buttons */}
+              {live !== 'off' && settings.confirmMode === 'end' && proposedCount > 0 && (
+                <button type="button" className="btn btn-success" onClick={() => void startReview()}>
+                  ✓ {fmt(t.session.review_now, { n: proposedCount })}
+                </button>
+              )}
               <div role="toolbar" aria-label={t.session.controls} className="-mx-2 flex flex-wrap items-center justify-between gap-1 border-t border-line pt-3">
                 <button type="button" className="btn-quiet" onClick={() => void present(session.currentIndex - 1)} disabled={session.currentIndex === 0}>← {t.session.prev}</button>
                 <span className="flex gap-1">
