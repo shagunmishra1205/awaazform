@@ -40,7 +40,8 @@ export async function startMockSession(page, base, settings) {
     if (s) localStorage.setItem('awaazform.settings', JSON.stringify(s));
   }, settings);
   await page.reload();
-  await page.getByLabel('Google Form link').fill(MOCK_FORM_URL);
-  await page.getByRole('button', { name: /Read the form/ }).click();
-  await page.getByRole('heading', { name: 'Ready when you are' }).waitFor();
+  // Language-independent selectors, so sessions can be tested in any interface language.
+  await page.locator('#form-url').fill(MOCK_FORM_URL);
+  await page.locator('form button[type="submit"]').click();
+  await page.locator('#scan-h').waitFor();
 }

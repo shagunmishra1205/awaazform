@@ -49,7 +49,7 @@ try {
   assert.equal(await q1.inputValue(), 'Sunita Devi');
 
   // Remember prompt (J2) → yes.
-  await page.getByText(/Remember for next time/).first().waitFor();
+  await page.getByText(/Remember this for next time/).first().waitFor();
   await page.getByRole('button', { name: 'Yes', exact: true }).click();
 
   // Q2: invalid email is rejected by validation, then corrected via spoken-style text.

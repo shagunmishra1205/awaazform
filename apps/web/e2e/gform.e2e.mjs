@@ -27,18 +27,18 @@ try {
   await page.goto(`${BASE}/form`);
   await page.evaluate(() => { localStorage.clear(); indexedDB.deleteDatabase('awaazform'); });
   await page.reload();
-  await page.getByRole('heading', { level: 1, name: /Fill a Google Form/ }).waitFor();
+  await page.getByRole('heading', { level: 1, name: /Fill an online form/ }).waitFor();
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'no horizontal overflow');
 
   // A link that isn't a Google Form is refused with a clear message.
-  const link = page.getByLabel('Google Form link');
+  const link = page.getByLabel(/Form link/);
   await link.fill('https://example.com/form');
   await page.getByRole('button', { name: /Read the form/ }).click();
-  await page.getByRole('alert').getByText(/doesn’t look like a Google Form link/).waitFor();
+  await page.getByRole('alert').getByText(/doesn’t look like a Google or Microsoft Forms link/).waitFor();
   await shot(page, 'gform-paste');
 
-  // The real form is scanned.
-  await link.fill(FORM);
+  // The real form is scanned, from the long link pasted without https:// (as copied from an address bar).
+  await link.fill(FORM.replace(/^https:\/\//, ''));
   await page.getByRole('button', { name: /Read the form/ }).click();
   await page.getByRole('heading', { name: 'Ready when you are' }).waitFor({ timeout: 20_000 });
   await page.getByText('Open in Google Forms').first().waitFor();
@@ -57,7 +57,7 @@ try {
     await page.getByRole('button', { name: /Confirm/ }).click();
     await page.getByRole('link', { name: new RegExp(`Open in Google Forms ${i + 1} confirmed`) }).waitFor({ timeout: 15_000 });
     await page.waitForTimeout(300);
-    const remember = page.getByText(/Remember for next time/).first();
+    const remember = page.getByText(/Remember this for next time/).first();
     if (await remember.isVisible().catch(() => false)) await page.getByRole('button', { name: 'No', exact: true }).click();
   }
   await shot(page, 'gform-done');
